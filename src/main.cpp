@@ -11,6 +11,14 @@ extern "C" {
 
 uintptr_t ks_handle = 0;
 
+#define NUM_BANKS 16
+typedef struct {
+    float* buffer;
+    int length;
+} BankedWave;
+BankedWave banks[NUM_BANKS] = {0};
+
+
 int my_load_cb(hazel_app_t* app, const char* filepath, void* user_data) { 
     size_t f_len = strlen(filepath);
     
@@ -169,6 +177,8 @@ const char* ksynth_help_as_html(const char* ext) {
            "<h3>Slash Commands</h3>"
            "<ul>"
            "<li><b>\\? [var]</b> - View variable waveform graph</li>\n           <li><b>\\p [var]</b> - Play the variable (Mono)</li>"
+           "<li><b>\\b [0-15] [var]</b> - Bank a variable into slot 0-15</li>"
+           "<li><b>\\pb [0-15]</b> - Play a banked wave slot</li>"
            "<li><b>\\ps [var]</b> - Play the variable (Stereo)</li>"
            "<li><b>\\l [file]</b> - Load a file (handled by Hazel)</li>"
            "<li><b>\\w [ms]</b> - Wait for N milliseconds</li>"
@@ -212,7 +222,35 @@ void my_eval_engine(const char* input, hazel_ctx_t* ctx, void* user_data) {
         if (p[0] == '\\') {
             flush_block();
             
-            if (p[1] == 'p') {
+            if (p[1] == 'p' && p[2] == 'b') {
+                int slot = -1;
+                if (sscanf(p + 3, "%d", &slot) == 1 && slot >= 0 && slot < NUM_BANKS) {
+                    if (banks[slot].buffer && banks[slot].length > 0) {
+                        int vslot = -1;
+                        for (int i = 0; i < MAX_VOICES; i++) {
+                            if (!voices[i].active) { vslot = i; break; }
+                        }
+                        if (vslot != -1) {
+                            if (voices[vslot].buffer) free(voices[vslot].buffer);
+                            voices[vslot].n = banks[slot].length;
+                            voices[vslot].buffer = (float*)malloc(voices[vslot].n * sizeof(float));
+                            memcpy(voices[vslot].buffer, banks[slot].buffer, voices[vslot].n * sizeof(float));
+                            voices[vslot].idx = 0;
+                            voices[vslot].stereo = 0; // banks are mono for now
+                            voices[vslot].active = 1;
+                            char msg[64];
+                            snprintf(msg, sizeof(msg), "Playing bank %d in slot %d\n", slot, vslot);
+                            hazel_append_output(ctx, msg, 0);
+                        } else {
+                            hazel_append_output(ctx, "No free voice slots\n", 1);
+                        }
+                    } else {
+                        hazel_append_output(ctx, "Bank empty\n", 1);
+                    }
+                } else {
+                    hazel_append_output(ctx, "Invalid bank slot\n", 1);
+                }
+            } else if (p[1] == 'p') {
                 int is_stereo = 0;
                 char* arg = p + 2;
                 if (*arg == 's') {
@@ -249,6 +287,28 @@ void my_eval_engine(const char* input, hazel_ctx_t* ctx, void* user_data) {
                     } else {
                         hazel_append_output(ctx, "Variable not found or empty\n", 1);
                     }
+                }
+            } else if (p[1] == 'b') {
+                int slot = -1;
+                char v_name = 0;
+                char* arg = p + 2;
+                while (*arg == ' ') arg++;
+                if (sscanf(arg, "%d %c", &slot, &v_name) == 2 && slot >= 0 && slot < NUM_BANKS) {
+                    int r = ks_ctx_get_var(ks_handle, v_name);
+                    float* buf = ks_ctx_get_var_buf(ks_handle);
+                    if (r > 0 && buf) {
+                        if (banks[slot].buffer) free(banks[slot].buffer);
+                        banks[slot].buffer = (float*)malloc(r * sizeof(float));
+                        memcpy(banks[slot].buffer, buf, r * sizeof(float));
+                        banks[slot].length = r;
+                        char msg[64];
+                        snprintf(msg, sizeof(msg), "Banked %c into slot %d\n", v_name, slot);
+                        hazel_append_output(ctx, msg, 0);
+                    } else {
+                        hazel_append_output(ctx, "Variable empty or invalid\n", 1);
+                    }
+                } else {
+                    hazel_append_output(ctx, "Invalid bank command (use: \\b [0-15] [A-Z])\n", 1);
                 }
             } else if (p[1] == '?') {
                 char v_name = get_var(p + 2);
