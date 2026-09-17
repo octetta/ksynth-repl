@@ -123,13 +123,13 @@ public:
         const char* cmd = "CTRL";
         #endif
         
-        if (app_->getConfig().parser_mode != 1) {
+        if (app_->getConfig().parser_mode == 0) {
             drawKeyLeft(left_x, cur_y, cmd, "U", "Mkdn");
             drawKeyLeft(left_x, cur_y, cmd, "Y", "Code");
         }
         drawKeyLeft(left_x, cur_y, cmd, "~", "Terminal");
         drawKeyLeft(left_x, cur_y, cmd, "D", "Delete");
-        if (app_->getConfig().parser_mode != 1) {
+        if (app_->getConfig().parser_mode == 0) {
             drawKeyLeft(left_x, cur_y, "ALT", "RET", "Split");
         }
         drawKeyLeft(left_x, cur_y, cmd, "RET", "Eval");
@@ -312,7 +312,7 @@ static void style_update_cb(int pos, int nInserted, int nDeleted, int nRestyled,
         }
     }
     
-    if (app->getConfig().parser_mode == 1) {
+    if (app->getConfig().parser_mode > 0) {
         if (nInserted > 0) {
             std::string styles(nInserted, 'A');
             style_buf->replace(pos, pos + nDeleted, styles.c_str());
@@ -335,10 +335,18 @@ static void style_update_cb(int pos, int nInserted, int nDeleted, int nRestyled,
             bool starts_with_hash = false;
             
             int len = line_end - line_start;
-            if (len >= 2 && buffer->char_at(line_start) == '#' && buffer->char_at(line_start + 1) == '#') {
-                starts_with_hash_hash = true;
-            } else if (len >= 1 && buffer->char_at(line_start) == '#') {
-                starts_with_hash = true;
+            if (app->getConfig().parser_mode == 2) {
+                if (len >= 2 && buffer->char_at(line_start) == '/' && buffer->char_at(line_start + 1) == '/') {
+                    starts_with_hash_hash = true;
+                } else if (len >= 1 && buffer->char_at(line_start) == '/') {
+                    starts_with_hash = true;
+                }
+            } else {
+                if (len >= 2 && buffer->char_at(line_start) == '#' && buffer->char_at(line_start + 1) == '#') {
+                    starts_with_hash_hash = true;
+                } else if (len >= 1 && buffer->char_at(line_start) == '#') {
+                    starts_with_hash = true;
+                }
             }
             
             if (starts_with_hash_hash) {
@@ -495,7 +503,7 @@ int HazelEditor::handle(int event) {
         }
         
         // Convert to Markdown
-        if (app_->getConfig().parser_mode != 1 && key == 'u' && (Fl::event_state() & FL_COMMAND)) {
+        if (app_->getConfig().parser_mode == 0 && key == 'u' && (Fl::event_state() & FL_COMMAND)) {
             int pos = insert_position();
             char style = app_->getStyleAt(pos);
             if (style != 'A' && pos > 0 && app_->getStyleAt(pos - 1) == 'A' && buffer()->char_at(pos - 1) != '\n') {
@@ -525,7 +533,7 @@ int HazelEditor::handle(int event) {
         }
         
         // Convert to Code
-        if (app_->getConfig().parser_mode != 1 && key == 'y' && (Fl::event_state() & FL_COMMAND)) {
+        if (app_->getConfig().parser_mode == 0 && key == 'y' && (Fl::event_state() & FL_COMMAND)) {
             int pos = insert_position();
             char style = app_->getStyleAt(pos);
             if (style != 'D' && pos > 0 && app_->getStyleAt(pos - 1) == 'D' && buffer()->char_at(pos - 1) != '\n') {
@@ -577,7 +585,7 @@ int HazelEditor::handle(int event) {
         }
 
         // Split Cell (Alt+Enter)
-        if (app_->getConfig().parser_mode != 1 && (key == FL_Enter || key == FL_KP_Enter) && (Fl::event_state() & FL_ALT)) {
+        if (app_->getConfig().parser_mode == 0 && (key == FL_Enter || key == FL_KP_Enter) && (Fl::event_state() & FL_ALT)) {
             int pos = insert_position();
             char current_style = app_->getStyleAt(pos);
             if (current_style == 'C' || current_style == 'B') return 1; // Don't split output
@@ -641,7 +649,7 @@ int HazelEditor::handle(int event) {
                     for (int i = start; i < end; i++) {
                         char s = app_->getStyleAt(i);
                         if (app_->isOutputStyle(s)) return 1;
-                        if (app_->getConfig().parser_mode != 1 && s != first_s) return 1; // Prevent deleting across multiple cell types
+                        if (app_->getConfig().parser_mode == 0 && s != first_s) return 1; // Prevent deleting across multiple cell types
                     }
                 }
             } else {
@@ -652,7 +660,7 @@ int HazelEditor::handle(int event) {
                         if (app_->isOutputStyle(s)) return 1;
                         
                         char curr = app_->getStyleAt(pos);
-                        if (app_->getConfig().parser_mode != 1) {
+                        if (app_->getConfig().parser_mode == 0) {
                             if (curr != 0 && s != 0 && curr != s) return 1;
                             
                             if (buffer()->char_at(pos - 1) == '\n' && pos > 1 && pos < buffer()->length()) {
@@ -665,7 +673,7 @@ int HazelEditor::handle(int event) {
                         char s = app_->getStyleAt(pos);
                         if (app_->isOutputStyle(s)) return 1;
                         
-                        if (app_->getConfig().parser_mode != 1) {
+                        if (app_->getConfig().parser_mode == 0) {
                             if (buffer()->char_at(pos) == '\n' && pos > 0 && pos + 1 < buffer()->length()) {
                                 if (app_->getStyleAt(pos - 1) != app_->getStyleAt(pos + 1)) return 1;
                             }
@@ -1400,7 +1408,7 @@ void HazelEditor::draw() {
                 
                 char badge[16];
                 if (curr_type == 0) snprintf(badge, sizeof(badge), "C%d", block_idx);
-                else if (curr_type == 1) snprintf(badge, sizeof(badge), (app_->getConfig().parser_mode == 1) ? "N%d" : "M%d", block_idx);
+                else if (curr_type == 1) snprintf(badge, sizeof(badge), (app_->getConfig().parser_mode > 0) ? "N%d" : "M%d", block_idx);
                 else snprintf(badge, sizeof(badge), "O%d", block_idx);
                 
                 if (line_start > 0) {
@@ -1491,7 +1499,7 @@ void HazelApp::updateStatusBar(bool force) {
     }
     
     const char* mode = "Code";
-    if (style == 'D') mode = (config_.parser_mode == 1) ? "Note" : "Markdown";
+    if (style == 'D') mode = (config_.parser_mode > 0) ? "Note" : "Markdown";
     else if (isOutputStyle(style)) mode = "Output";
     
     char target_block = isOutputStyle(style) ? 'B' : style;
@@ -1618,7 +1626,7 @@ void HazelApp::appendBlock(char style, const char* text) {
     style_buffer_->insert(pos, styles.c_str());
     buffer_->add_modify_callback(style_update_cb, this);
     
-    if (config_.parser_mode == 1) {
+    if (config_.parser_mode > 0) {
         style_update_cb(0, 0, 0, 0, "", this);
     }
 }
@@ -1824,7 +1832,7 @@ void HazelApp::loadPreferences() {
 }
 
 void HazelApp::showHelpWindow() {
-    HelpWindow* hw = new HelpWindow(app_title_, app_version_, config_.parser_mode == 1, config_.help_extension_html, config_.help_extension_cb);
+    HelpWindow* hw = new HelpWindow(app_title_, app_version_, config_.parser_mode > 0, config_.help_extension_html, config_.help_extension_cb);
     hw->callback([](Fl_Widget* w, void*) {
         w->hide();
         Fl::delete_widget(w);

@@ -73,24 +73,163 @@ int my_dir_cb(hazel_app_t* app, const char* dirpath, void* user_data) {
     return 0;
 }
 
+
+
+#include "miniaudio.h"
+
+#define MAX_VOICES 8
+
+typedef struct {
+  float* buffer;
+  int n;
+  int idx;
+  int stereo;
+  int active;
+} Voice;
+
+volatile Voice voices[MAX_VOICES] = {0};
+
+void cb(ma_device* d, void* o, const void* i, ma_uint32 n) {
+  float* out = (float*)o;
+  
+  for (ma_uint32 j = 0; j < n * 2; j++) {
+    out[j] = 0.0f;
+  }
+  
+  for (int v = 0; v < MAX_VOICES; v++) {
+    if (!voices[v].active) continue;
+    
+    float* buf = voices[v].buffer;
+    int len = voices[v].n;
+    int idx = voices[v].idx;
+    int stereo = voices[v].stereo;
+    
+    if (!buf) {
+      voices[v].active = 0;
+      continue;
+    }
+    
+    for (ma_uint32 j = 0; j < n; j++) {
+      if (idx >= len) {
+        voices[v].active = 0;
+        break;
+      }
+      
+      if (stereo && idx + 1 < len) {
+        out[j*2]   += buf[idx++];
+        out[j*2+1] += buf[idx++];
+      } else {
+        float val = buf[idx++];
+        out[j*2]   += val;
+        out[j*2+1] += val;
+      }
+    }
+    
+    voices[v].idx = idx;
+  }
+}
+
+ma_device_config cfg;
+ma_device dev;
+
+int audio_start(void) {
+  cfg = ma_device_config_init(ma_device_type_playback);
+  cfg.playback.format = ma_format_f32;
+  cfg.playback.channels = 2;
+  cfg.sampleRate = 44100;
+  cfg.dataCallback = cb;
+  if (ma_device_init(NULL, &cfg, &dev) != MA_SUCCESS) return 1;
+  ma_device_start(&dev);
+  return 0;
+}
+
+int audio_end(void) {
+  for (int i = 0; i < MAX_VOICES; i++) {
+    if (voices[i].buffer) {
+      free(voices[i].buffer);
+      voices[i].buffer = NULL;
+    }
+  }
+  ma_device_uninit(&dev);
+  return 0;
+}
+
+static char get_var(const char *ptr) {
+  while (*ptr == ' ') ptr++;
+  char v_name = *ptr;
+  if (v_name >= 'A' && v_name <= 'Z') return v_name;
+  return '\0';
+}
+
 void my_eval_engine(const char* input, hazel_ctx_t* ctx, void* user_data) {
-    char buf[1024];
-    snprintf(buf, sizeof(buf), "%s", input);
+    // Copy input to mutate
+    char* text = strdup(input);
+    char* line = strtok(text, "\n");
     
-    int r = ks_ctx_repl(ks_handle, buf);
-    
-    const char* out_str = ks_ctx_repl_str(ks_handle);
-    if (out_str && strlen(out_str) > 0) {
-        hazel_append_output(ctx, out_str, 0);
+    while (line) {
+        // Skip leading whitespace
+        char* p = line;
+        while (*p == ' ' || *p == '\t') p++;
+        
+        if (p[0] == '\\') {
+            if (p[1] == 'p') {
+                int is_stereo = 0;
+                char* arg = p + 2;
+                if (*arg == 's') {
+                    is_stereo = 1;
+                    arg++;
+                }
+                char v_name = get_var(arg);
+                if (v_name) {
+                    int r = ks_ctx_get_var(ks_handle, v_name);
+                    float* buf = ks_ctx_get_var_buf(ks_handle);
+                    if (r > 0 && buf) {
+                        int slot = -1;
+                        for (int i = 0; i < MAX_VOICES; i++) {
+                            if (!voices[i].active) {
+                                slot = i;
+                                break;
+                            }
+                        }
+                        if (slot != -1) {
+                            if (voices[slot].buffer) free(voices[slot].buffer);
+                            voices[slot].n = r;
+                            voices[slot].buffer = (float*)malloc(r * sizeof(float));
+                            memcpy(voices[slot].buffer, buf, r * sizeof(float));
+                            voices[slot].idx = 0;
+                            voices[slot].stereo = is_stereo;
+                            voices[slot].active = 1;
+                            
+                            char msg[64];
+                            snprintf(msg, sizeof(msg), "playing %c in slot %d (%s)\n", v_name, slot, is_stereo ? "stereo" : "mono");
+                            hazel_append_output(ctx, msg, 0);
+                        } else {
+                            hazel_append_output(ctx, "No free voice slots\n", 1);
+                        }
+                    } else {
+                        hazel_append_output(ctx, "Variable not found or empty\n", 1);
+                    }
+                }
+            }
+        } else if (p[0] != '/' && p[0] != '\0') {
+            int r = ks_ctx_repl(ks_handle, p);
+            const char* out_str = ks_ctx_repl_str(ks_handle);
+            if (out_str && strlen(out_str) > 0) {
+                char msg[1024];
+                snprintf(msg, sizeof(msg), "%s\n", out_str);
+                hazel_append_output(ctx, msg, 0);
+            }
+            if (r < 0) {
+                const char* err = ks_ctx_get_error(ks_handle);
+                char msg[256];
+                snprintf(msg, sizeof(msg), "error: %s\n", err ? err : "unknown");
+                hazel_append_output(ctx, msg, 1);
+            }
+        }
+        line = strtok(NULL, "\n");
     }
     
-    if (r < 0) {
-        const char* err = ks_ctx_get_error(ks_handle);
-        char msg[256];
-        snprintf(msg, sizeof(msg), "error: %s\n", err ? err : "unknown");
-        hazel_append_output(ctx, msg, 1);
-    }
-    
+    free(text);
     hazel_finish_eval(ctx);
 }
 
@@ -155,7 +294,9 @@ int main(int argc, char** argv) {
         hazel_load_file(app, file_to_load);
     }
     
+    audio_start();
     hazel_run(app);
+    audio_end();
     
     ks_ctx_destroy(ks_handle);
     
