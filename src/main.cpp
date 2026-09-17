@@ -192,11 +192,7 @@ void my_eval_engine(const char* input, hazel_ctx_t* ctx, void* user_data) {
             
             if (r == 0 && out_str && strlen(out_str) > 0) {
                 char msg[1024];
-                if (r_len > 1) {
-                    snprintf(msg, sizeof(msg), "[Array: %d samples]\n", r_len);
-                } else {
-                    snprintf(msg, sizeof(msg), "%s\n", out_str);
-                }
+                snprintf(msg, sizeof(msg), "%s\n", out_str);
                 hazel_append_output(ctx, msg, 0);
             }
             if (r < 0) {
