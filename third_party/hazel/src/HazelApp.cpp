@@ -274,6 +274,7 @@ public:
                 "<tr><td align='right' width='45%'><b>//</b></td><td>starts a Note Block</td></tr>"
                 "<tr><td align='right'><b>/</b></td><td>continues a Note Block</td></tr>"
                 "<tr><td align='right'><b><i>(normal line)</i></b></td><td>starts a Code Block</td></tr>"
+                "<tr><td align='right'><b>Alt + A-Z</b></td><td>Play Variable A-Z (\\p)</td></tr>"
                 "</table>";
         } else if (parser_mode == 1) {
             base_help_text_ += 
@@ -573,7 +574,11 @@ int HazelEditor::handle(int event) {
         if (key >= 'a' && key <= 'z' && (Fl::event_state() & FL_ALT)) {
             char lbl[2] = {(char)('A' + (key - 'a')), '\0'};
             char cmd[16];
-            snprintf(cmd, sizeof(cmd), "_MC%s", lbl);
+            if (app_->getConfig().parser_mode == 2) {
+                snprintf(cmd, sizeof(cmd), "\\p %s", lbl);
+            } else {
+                snprintf(cmd, sizeof(cmd), "_MC%s", lbl);
+            }
             hazel_ctx_t* term_ctx = new hazel_ctx_t();
             memset(term_ctx, 0, sizeof(hazel_ctx_t));
             term_ctx->app = app_;
