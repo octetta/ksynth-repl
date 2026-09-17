@@ -91,7 +91,10 @@ int my_dir_cb(hazel_app_t* app, const char* dirpath, void* user_data) {
 typedef struct {
   float* buffer;
   int n;
-  int idx;
+  double idx;
+  double phase_inc;
+  float gain;
+  float atten;
   int stereo;
   int active;
 } Voice;
@@ -110,7 +113,10 @@ void cb(ma_device* d, void* o, const void* i, ma_uint32 n) {
     
     float* buf = voices[v].buffer;
     int len = voices[v].n;
-    int idx = voices[v].idx;
+    double idx = voices[v].idx;
+    double phase_inc = voices[v].phase_inc;
+    float gain = voices[v].gain;
+    float atten = voices[v].atten;
     int stereo = voices[v].stereo;
     
     if (!buf) {
@@ -119,22 +125,38 @@ void cb(ma_device* d, void* o, const void* i, ma_uint32 n) {
     }
     
     for (ma_uint32 j = 0; j < n; j++) {
-      if (idx >= len) {
+      int i0 = (int)idx;
+      if (i0 >= len || gain <= 0.0001f) {
         voices[v].active = 0;
         break;
       }
       
-      if (stereo && idx + 1 < len) {
-        out[j*2]   += buf[idx++];
-        out[j*2+1] += buf[idx++];
+      if (stereo) {
+          // Nearest neighbor for stereo to keep it simple, or aligned interpolation
+          int i0_s = (i0 / 2) * 2;
+          if (i0_s + 1 >= len) {
+              voices[v].active = 0; break;
+          }
+          out[j * 2] += buf[i0_s] * gain;
+          out[j * 2 + 1] += buf[i0_s + 1] * gain;
+          idx += phase_inc * 2.0;
       } else {
-        float val = buf[idx++];
-        out[j*2]   += val;
-        out[j*2+1] += val;
+          // Linear interpolation for mono
+          int i1 = i0 + 1;
+          if (i1 >= len) i1 = i0;
+          float frac = (float)(idx - i0);
+          float sample = buf[i0] + (buf[i1] - buf[i0]) * frac;
+          
+          out[j * 2] += sample * gain;
+          out[j * 2 + 1] += sample * gain;
+          idx += phase_inc;
       }
+      
+      gain *= atten;
     }
     
     voices[v].idx = idx;
+    voices[v].gain = gain;
   }
 }
 
@@ -178,7 +200,7 @@ const char* ksynth_help_as_html(const char* ext) {
            "<ul>"
            "<li><b>\\? [var]</b> - View variable waveform graph</li>\n           <li><b>\\p [var]</b> - Play the variable (Mono)</li>"
            "<li><b>\\b [0-15] [var]</b> - Bank a variable into slot 0-15</li>"
-           "<li><b>\\pb [0-15]</b> - Play a banked wave slot</li>"
+           "<li><b>\\pb [0-15] [semi] [cents] [gain] [atten]</b> - Play bank (optional params)</li>"
            "<li><b>\\ps [var]</b> - Play the variable (Stereo)</li>"
            "<li><b>\\l [file]</b> - Load a file (handled by Hazel)</li>"
            "<li><b>\\w [ms]</b> - Wait for N milliseconds</li>"
@@ -224,7 +246,9 @@ void my_eval_engine(const char* input, hazel_ctx_t* ctx, void* user_data) {
             
             if (p[1] == 'p' && p[2] == 'b') {
                 int slot = -1;
-                if (sscanf(p + 3, "%d", &slot) == 1 && slot >= 0 && slot < NUM_BANKS) {
+                float semis = 0.0f, cents = 0.0f, gain = 1.0f, atten = 1.0f;
+                int parsed = sscanf(p + 3, "%d %f %f %f %f", &slot, &semis, &cents, &gain, &atten);
+                if (parsed >= 1 && slot >= 0 && slot < NUM_BANKS) {
                     if (banks[slot].buffer && banks[slot].length > 0) {
                         int vslot = -1;
                         for (int i = 0; i < MAX_VOICES; i++) {
@@ -236,10 +260,13 @@ void my_eval_engine(const char* input, hazel_ctx_t* ctx, void* user_data) {
                             voices[vslot].buffer = (float*)malloc(voices[vslot].n * sizeof(float));
                             memcpy(voices[vslot].buffer, banks[slot].buffer, voices[vslot].n * sizeof(float));
                             voices[vslot].idx = 0;
+                            voices[vslot].phase_inc = pow(2.0, (semis + cents / 100.0) / 12.0);
+                            voices[vslot].gain = gain;
+                            voices[vslot].atten = atten;
                             voices[vslot].stereo = 0; // banks are mono for now
                             voices[vslot].active = 1;
-                            char msg[64];
-                            snprintf(msg, sizeof(msg), "Playing bank %d in slot %d\n", slot, vslot);
+                            char msg[128];
+                            snprintf(msg, sizeof(msg), "Playing bank %d (semi:%.1f, cents:%.1f, gain:%.2f, atten:%.4f)\n", slot, semis, cents, gain, atten);
                             hazel_append_output(ctx, msg, 0);
                         } else {
                             hazel_append_output(ctx, "No free voice slots\n", 1);
@@ -279,6 +306,9 @@ void my_eval_engine(const char* input, hazel_ctx_t* ctx, void* user_data) {
                             voices[slot].buffer = (float*)malloc(r * sizeof(float));
                             memcpy(voices[slot].buffer, buf, r * sizeof(float));
                             voices[slot].idx = 0;
+                            voices[slot].phase_inc = 1.0;
+                            voices[slot].gain = 1.0f;
+                            voices[slot].atten = 1.0f;
                             voices[slot].stereo = is_stereo;
                             voices[slot].active = 1;
                             
