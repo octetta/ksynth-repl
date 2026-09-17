@@ -178,16 +178,44 @@ const char* ksynth_help_as_html(const char* ext) {
 }
 
 void my_eval_engine(const char* input, hazel_ctx_t* ctx, void* user_data) {
-    // Copy input to mutate
     char* text = strdup(input);
     char* line = strtok(text, "\n");
     
+    char block_buf[8192];
+    block_buf[0] = '\0';
+    
+    auto flush_block = [&]() {
+        if (strlen(block_buf) > 0) {
+            int r = ks_ctx_repl(ks_handle, block_buf);
+            int r_len = ks_ctx_repl_length(ks_handle);
+            const char* out_str = ks_ctx_repl_str(ks_handle);
+            
+            if (r == 0 && out_str && strlen(out_str) > 0) {
+                char msg[1024];
+                if (r_len > 1) {
+                    snprintf(msg, sizeof(msg), "[Array: %d samples]\n", r_len);
+                } else {
+                    snprintf(msg, sizeof(msg), "%s\n", out_str);
+                }
+                hazel_append_output(ctx, msg, 0);
+            }
+            if (r < 0) {
+                const char* err = ks_ctx_get_error(ks_handle);
+                char msg[256];
+                snprintf(msg, sizeof(msg), "error: %s\n", err ? err : "unknown");
+                hazel_append_output(ctx, msg, 1);
+            }
+            block_buf[0] = '\0';
+        }
+    };
+    
     while (line) {
-        // Skip leading whitespace
         char* p = line;
         while (*p == ' ' || *p == '\t') p++;
         
         if (p[0] == '\\') {
+            flush_block();
+            
             if (p[1] == 'p') {
                 int is_stereo = 0;
                 char* arg = p + 2;
@@ -244,25 +272,15 @@ void my_eval_engine(const char* input, hazel_ctx_t* ctx, void* user_data) {
                 }
             }
         } else if (p[0] != '/' && p[0] != '\0') {
-            int r = ks_ctx_repl(ks_handle, p);
-            const char* out_str = ks_ctx_repl_str(ks_handle);
-            if (out_str && strlen(out_str) > 0) {
-                char msg[1024];
-                snprintf(msg, sizeof(msg), "%s\n", out_str);
-                hazel_append_output(ctx, msg, 0);
-                
-
-            }
-            if (r < 0) {
-                const char* err = ks_ctx_get_error(ks_handle);
-                char msg[256];
-                snprintf(msg, sizeof(msg), "error: %s\n", err ? err : "unknown");
-                hazel_append_output(ctx, msg, 1);
+            if (strlen(block_buf) + strlen(p) + 2 < sizeof(block_buf)) {
+                strcat(block_buf, p);
+                strcat(block_buf, "\n");
             }
         }
         line = strtok(NULL, "\n");
     }
     
+    flush_block();
     free(text);
     hazel_finish_eval(ctx);
 }
