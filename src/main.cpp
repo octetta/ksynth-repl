@@ -2,7 +2,9 @@
 #include <iostream>
 #include <cstring>
 #include "hazel/hazel.h"
+extern "C" {
 #include "ksynth.h"
+}
 #include <FL/Fl.H>
 #include <unistd.h>
 
