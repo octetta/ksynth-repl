@@ -52,7 +52,7 @@ TerminalPane::~TerminalPane() {
 }
 
 void TerminalPane::printPrompt() {
-    const char* prompt = "skred> ";
+    const char* prompt = "ksynth> ";
     buf_->remove_modify_callback(style_update_cb, this);
     int p = buf_->length();
     std::string s(strlen(prompt), 'A');

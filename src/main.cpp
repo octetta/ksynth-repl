@@ -7,6 +7,7 @@ extern "C" {
 }
 #include <FL/Fl.H>
 #include <unistd.h>
+#include "scope.h"
 
 uintptr_t ks_handle = 0;
 
@@ -161,6 +162,21 @@ static char get_var(const char *ptr) {
   return '\0';
 }
 
+
+const char* ksynth_help_as_html(const char* ext) {
+    return "<h2>KSynth-REPL Help</h2>"
+           "<p>KSynth is an array-oriented audio language. Commands are evaluated line by line.</p>"
+           "<h3>Slash Commands</h3>"
+           "<ul>"
+           "<li><b>\\p [var]</b> - Play the variable (Mono)</li>"
+           "<li><b>\\ps [var]</b> - Play the variable (Stereo)</li>"
+           "<li><b>\\l [file]</b> - Load a file (handled by Hazel)</li>"
+           "<li><b>\\w [ms]</b> - Wait for N milliseconds</li>"
+           "<li><b>\\s [var]</b> - Save to mono WAV (TBD)</li>"
+           "<li><b>\\ss [var]</b> - Save to stereo WAV (TBD)</li>"
+           "</ul>";
+}
+
 void my_eval_engine(const char* input, hazel_ctx_t* ctx, void* user_data) {
     // Copy input to mutate
     char* text = strdup(input);
@@ -218,6 +234,23 @@ void my_eval_engine(const char* input, hazel_ctx_t* ctx, void* user_data) {
                 char msg[1024];
                 snprintf(msg, sizeof(msg), "%s\n", out_str);
                 hazel_append_output(ctx, msg, 0);
+                
+                int r_len = ks_ctx_repl_length(ks_handle);
+                if (r_len > 1) {
+                    float* buf = (float*)malloc(r_len * sizeof(float));
+                    if (buf) {
+                        int got = ks_ctx_repl_get_floats(ks_handle, buf, r_len);
+                        if (got > 0) {
+                            double* dbuf = (double*)malloc(got * sizeof(double));
+                            if (dbuf) {
+                                for (int i = 0; i < got; i++) dbuf[i] = buf[i];
+                                print_scope(ctx, dbuf, got, 128, 64);
+                                free(dbuf);
+                            }
+                        }
+                        free(buf);
+                    }
+                }
             }
             if (r < 0) {
                 const char* err = ks_ctx_get_error(ks_handle);
@@ -273,7 +306,8 @@ int main(int argc, char** argv) {
     config.on_open = my_load_cb;
     config.on_save = my_save_cb;
     config.on_open_dir = my_dir_cb;
-    config.startup_text = "//\n1000 0.5 T\n";
+    config.help_extension_cb = ksynth_help_as_html;
+    config.startup_text = "//\nA:!5\n";
     
     hazel_set_config(app, &config);
     hazel_load_preferences(app);

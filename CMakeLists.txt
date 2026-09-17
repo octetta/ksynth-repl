@@ -14,7 +14,7 @@ add_subdirectory(third_party/hazel)
 # Set path to k-synth source
 set(KSYNTH_DIR "/home/stewartj/book/k-synth")
 
-add_executable(ksynth-repl MACOSX_BUNDLE WIN32 src/main.cpp ${KSYNTH_DIR}/ksynth.c ${KSYNTH_DIR}/ks_api.c ${KSYNTH_DIR}/miniaudio.c ${KSYNTH_DIR}/kgnuplot.c)
+add_executable(ksynth-repl MACOSX_BUNDLE WIN32 src/main.cpp src/scope.cpp ${KSYNTH_DIR}/ksynth.c ${KSYNTH_DIR}/ks_api.c ${KSYNTH_DIR}/miniaudio.c ${KSYNTH_DIR}/kgnuplot.c)
 target_include_directories(ksynth-repl PRIVATE ${KSYNTH_DIR})
 
 if(WIN32)
