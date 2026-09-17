@@ -212,7 +212,7 @@ public:
         disp_->value(text.c_str());
     }
 
-    HelpWindow(const std::string& app_title, const std::string& app_version, bool is_skred_mode, const char* ext_html, const char* (*help_cb)(const char*)) : Fl_Double_Window(600, 700, "Help & About") {
+    HelpWindow(const std::string& app_title, const std::string& app_version, int parser_mode, const char* ext_html, const char* (*help_cb)(const char*)) : Fl_Double_Window(600, 700, "Help & About") {
         help_cb_ = help_cb;
         this->color(fl_rgb_color(245, 245, 250));
         
@@ -261,14 +261,21 @@ public:
             "<tr><td align='right'><b>Cmd/Ctrl + R</b></td><td>Run All Blocks</td></tr>"
             "<tr><td align='right'><b>Cmd/Ctrl + D</b></td><td>Delete Current Block</td></tr>"
             "<tr><td align='right'><b>Cmd/Ctrl + Up / Down</b></td><td>Move Cell</td></tr>"
-            "<tr><td align='right'><b>Alt + A..Z</b></td><td>Trigger Macros A-Z</td></tr>"
             "<tr><td colspan='2'> </td></tr>"
             "<tr><td align='right'><b>Ctrl + `</b></td><td>Toggle Terminal Panel</td></tr>"
             "<tr><td align='right'><b>Ctrl + Tab / Down</b></td><td>Focus Terminal</td></tr>"
             "<tr><td align='right'><b>Ctrl + Tab / Up</b></td><td>Focus Editor</td></tr>"
             "</table>";
             
-        if (is_skred_mode) {
+        if (parser_mode == 2) {
+            base_help_text_ += 
+                "<h3 align='center'>KSynth-REPL Mode</h3>"
+                "<table width='100%' border='0' cellpadding='4'>"
+                "<tr><td align='right' width='45%'><b>//</b></td><td>starts a Note Block</td></tr>"
+                "<tr><td align='right'><b>/</b></td><td>continues a Note Block</td></tr>"
+                "<tr><td align='right'><b><i>(normal line)</i></b></td><td>starts a Code Block</td></tr>"
+                "</table>";
+        } else if (parser_mode == 1) {
             base_help_text_ += 
                 "<h3 align='center'>Skred-REPL Mode</h3>"
                 "<table width='100%' border='0' cellpadding='4'>"
