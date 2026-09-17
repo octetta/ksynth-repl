@@ -575,7 +575,7 @@ int HazelEditor::handle(int event) {
             char lbl[2] = {(char)('A' + (key - 'a')), '\0'};
             char cmd[16];
             if (app_->getConfig().parser_mode == 2) {
-                snprintf(cmd, sizeof(cmd), "\\p %s", lbl);
+                snprintf(cmd, sizeof(cmd), "\\pq %s", lbl);
             } else {
                 snprintf(cmd, sizeof(cmd), "_MC%s", lbl);
             }

@@ -252,9 +252,13 @@ void my_eval_engine(const char* input, hazel_ctx_t* ctx, void* user_data) {
                 }
             } else if (p[1] == 'p') {
                 int is_stereo = 0;
+                int is_quiet = 0;
                 char* arg = p + 2;
                 if (*arg == 's') {
                     is_stereo = 1;
+                    arg++;
+                } else if (*arg == 'q') {
+                    is_quiet = 1;
                     arg++;
                 }
                 char v_name = get_var(arg);
@@ -278,14 +282,16 @@ void my_eval_engine(const char* input, hazel_ctx_t* ctx, void* user_data) {
                             voices[slot].stereo = is_stereo;
                             voices[slot].active = 1;
                             
-                            char msg[64];
-                            snprintf(msg, sizeof(msg), "playing %c in slot %d (%s)\n", v_name, slot, is_stereo ? "stereo" : "mono");
-                            hazel_append_output(ctx, msg, 0);
+                            if (!is_quiet) {
+                                char msg[64];
+                                snprintf(msg, sizeof(msg), "playing %c in slot %d (%s)\n", v_name, slot, is_stereo ? "stereo" : "mono");
+                                hazel_append_output(ctx, msg, 0);
+                            }
                         } else {
-                            hazel_append_output(ctx, "No free voice slots\n", 1);
+                            if (!is_quiet) hazel_append_output(ctx, "No free voice slots\n", 1);
                         }
                     } else {
-                        hazel_append_output(ctx, "Variable not found or empty\n", 1);
+                        if (!is_quiet) hazel_append_output(ctx, "Variable not found or empty\n", 1);
                     }
                 }
             } else if (p[1] == 'b') {
