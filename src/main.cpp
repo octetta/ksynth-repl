@@ -168,7 +168,7 @@ const char* ksynth_help_as_html(const char* ext) {
            "<p>KSynth is an array-oriented audio language. Commands are evaluated line by line.</p>"
            "<h3>Slash Commands</h3>"
            "<ul>"
-           "<li><b>\\p [var]</b> - Play the variable (Mono)</li>"
+           "<li><b>\\? [var]</b> - View variable waveform graph</li>\n           <li><b>\\p [var]</b> - Play the variable (Mono)</li>"
            "<li><b>\\ps [var]</b> - Play the variable (Stereo)</li>"
            "<li><b>\\l [file]</b> - Load a file (handled by Hazel)</li>"
            "<li><b>\\w [ms]</b> - Wait for N milliseconds</li>"
@@ -226,6 +226,22 @@ void my_eval_engine(const char* input, hazel_ctx_t* ctx, void* user_data) {
                         hazel_append_output(ctx, "Variable not found or empty\n", 1);
                     }
                 }
+            } else if (p[1] == '?') {
+                char v_name = get_var(p + 2);
+                if (v_name) {
+                    int r = ks_ctx_get_var(ks_handle, v_name);
+                    float* buf = ks_ctx_get_var_buf(ks_handle);
+                    if (r > 0 && buf) {
+                        double* dbuf = (double*)malloc(r * sizeof(double));
+                        if (dbuf) {
+                            for (int i = 0; i < r; i++) dbuf[i] = buf[i];
+                            print_scope(ctx, dbuf, r, 128, 64);
+                            free(dbuf);
+                        }
+                    } else {
+                        hazel_append_output(ctx, "Variable not found or empty\n", 1);
+                    }
+                }
             }
         } else if (p[0] != '/' && p[0] != '\0') {
             int r = ks_ctx_repl(ks_handle, p);
@@ -235,22 +251,7 @@ void my_eval_engine(const char* input, hazel_ctx_t* ctx, void* user_data) {
                 snprintf(msg, sizeof(msg), "%s\n", out_str);
                 hazel_append_output(ctx, msg, 0);
                 
-                int r_len = ks_ctx_repl_length(ks_handle);
-                if (r_len > 1) {
-                    float* buf = (float*)malloc(r_len * sizeof(float));
-                    if (buf) {
-                        int got = ks_ctx_repl_get_floats(ks_handle, buf, r_len);
-                        if (got > 0) {
-                            double* dbuf = (double*)malloc(got * sizeof(double));
-                            if (dbuf) {
-                                for (int i = 0; i < got; i++) dbuf[i] = buf[i];
-                                print_scope(ctx, dbuf, got, 128, 64);
-                                free(dbuf);
-                            }
-                        }
-                        free(buf);
-                    }
-                }
+
             }
             if (r < 0) {
                 const char* err = ks_ctx_get_error(ks_handle);
