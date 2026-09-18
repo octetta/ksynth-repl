@@ -1,0 +1,175 @@
+name: One-Click Multi-Platform Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag_name:
+        description: 'Release tag (e.g. v0.1.0). Required for manual runs.'
+        required: true
+        default: 'v0.1.0'
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build (${{ matrix.platform }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            platform: linux-x86_64
+          - os: macos-latest
+            platform: macos-universal
+          - os: windows-latest
+            platform: windows-x86_64
+
+    defaults:
+      run:
+        shell: bash
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Resolve version
+        id: ver
+        run: |
+          if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
+            TAG="${{ github.event.inputs.tag_name }}"
+          else
+            TAG="${{ github.ref_name }}"
+          fi
+          VERSION="${TAG#v}"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "tag=$TAG version=$VERSION"
+
+      - name: Install Linux deps
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential cmake ninja-build pkg-config git curl \
+            libx11-dev libxft-dev libxcursor-dev libxinerama-dev libxrender-dev \
+            libpng-dev libjpeg-dev libfreetype6-dev libasound2-dev libxext-dev libxfixes-dev
+
+      - name: Configure & build (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+          cmake --build build --target ksynth-repl -j
+          test -x build/ksynth-repl
+
+      - name: Configure & build (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          cmake -S . -B build -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_OSX_ARCHITECTURES="arm64;x86_64" \
+            -DCMAKE_OSX_DEPLOYMENT_TARGET=11.0
+          cmake --build build --target ksynth-repl -j
+          codesign --force --deep --sign - build/ksynth-repl.app || true
+          test -d build/ksynth-repl.app
+
+      - name: Configure & build (Windows MinGW)
+        if: runner.os == 'Windows'
+        shell: cmd
+        run: |
+          cmake -S . -B build -G "MinGW Makefiles" -DCMAKE_BUILD_TYPE=Release
+          cmake --build build --target ksynth-repl -j
+          dir /s /b build\ksynth-repl.exe
+
+      - name: Package
+        if: runner.os != 'Windows'
+        run: |
+          set -euo pipefail
+          VERSION="${{ steps.ver.outputs.version }}"
+          PLATFORM="${{ matrix.platform }}"
+          NAME="ksynth-repl-${VERSION}-${PLATFORM}"
+          mkdir -p "pkg/${NAME}"
+          if [ "${{ runner.os }}" = "macOS" ]; then
+            cp -a build/ksynth-repl.app "pkg/${NAME}/"
+          else
+            cp -v build/ksynth-repl "pkg/${NAME}/"
+          fi
+          tar -C pkg -czf "${NAME}.tar.gz" "${NAME}"
+          sha256sum "${NAME}.tar.gz" > "${NAME}.tar.gz.sha256"
+          ls -lh "${NAME}.tar.gz"
+
+      - name: Package (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $VERSION = "${{ steps.ver.outputs.version }}"
+          $PLATFORM = "${{ matrix.platform }}"
+          $NAME = "ksynth-repl-$VERSION-$PLATFORM"
+          New-Item -ItemType Directory -Force -Path "pkg/$NAME" | Out-Null
+          $exe = Get-ChildItem -Path build -Recurse -Filter ksynth-repl.exe | Select-Object -First 1
+          if (-not $exe) { throw "ksynth-repl.exe not found" }
+          Copy-Item $exe.FullName "pkg/$NAME/"
+          Compress-Archive -Path "pkg/$NAME" -DestinationPath "$NAME.zip" -Force
+          $hash = (Get-FileHash -Algorithm SHA256 "$NAME.zip").Hash.ToLower()
+          "$hash  $NAME.zip" | Out-File -Encoding ascii "$NAME.zip.sha256"
+          Get-Item "$NAME.zip"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-${{ matrix.platform }}
+          path: |
+            *.tar.gz
+            *.tar.gz.sha256
+            *.zip
+            *.zip.sha256
+          if-no-files-found: error
+          retention-days: 14
+
+  publish:
+    name: Publish GitHub Release
+    needs: build
+    runs-on: ubuntu-latest
+    if: always() && needs.build.result != 'cancelled'
+
+    steps:
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+          pattern: release-*
+
+      - name: List files
+        run: find artifacts -type f | sort
+
+      - name: Create / update release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.event.inputs.tag_name || github.ref_name }}
+          name: ${{ github.event.inputs.tag_name || github.ref_name }}
+          draft: false
+          prerelease: false
+          generate_release_notes: true
+          fail_on_unmatched_files: false
+          files: |
+            artifacts/*.tar.gz
+            artifacts/*.tar.gz.sha256
+            artifacts/*.zip
+            artifacts/*.zip.sha256
+          body: |
+            Multi-platform **ksynth-repl** binaries.
+
+            | Platform | File |
+            |----------|------|
+            | Linux x86_64 | `ksynth-repl-*-linux-x86_64.tar.gz` |
+            | macOS universal | `ksynth-repl-*-macos-universal.tar.gz` |
+            | Windows x86_64 | `ksynth-repl-*-windows-x86_64.zip` (MinGW) |
+
+            SHA256 checksums attached.
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
