@@ -32,6 +32,7 @@ Built using FLTK, the Hazel UI framework, and Miniaudio, KSynth-REPL provides a 
 | `\b [0-127] [var] [opts]` | Bank a wave into a slot with default tuning/vol (e.g., `\b 60 A`). |
 | `\pb [0-127] [vel] [opts]` | Play a banked wave slot with optional velocity and overrides. |
 | `\mv [dB]` | Set the global master volume in decibels. |
+| `\vc [var]` | Load a 128-element array as the global velocity curve (LUT). |
 | `\l [file.ks]` | Load a KSynth file (handled by Hazel). |
 | `\w [ms]` | Wait for N milliseconds. |
 | `\s [var]` | Save the variable to a Mono WAV file (TBD). |
@@ -45,7 +46,7 @@ When banking (`\b`) or playing (`\pb`), you can optionally define/override the f
 3. **`cents`** (default `0`): Fine pitch detuning.
 4. **`gain_db`** (default `0.0`): Base amplitude in dB (e.g., `-6.0`).
 5. **`atten`** (default `1.0`): Per-sample linear decay.
-6. **`vel_sens`** (default `1.0`): Velocity sensitivity curve (0.0 = fixed volume, 1.0 = fully dynamic).
+6. **`vel_sens`** (default `1.0`): Velocity sensitivity (0.0 = fixed volume, 1.0 = full range mapped via `\vc`).
 
 *Example:* `\b 36 A 0 0 0.0 1.0 0.0` banks a kick drum into slot 36 with `0.0` sensitivity (always loud).
 *Example:* `\pb 36 64` plays slot 36 at velocity 64. Because of the `0.0` sensitivity, it will still play at maximum volume.

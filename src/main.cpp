@@ -11,6 +11,8 @@ extern "C" {
 
 uintptr_t ks_handle = 0;
 float master_vol_db = 0.0f;
+float master_vel_curve[128];
+bool vel_curve_initialized = false;
 
 #define NUM_BANKS 128
 typedef struct {
@@ -280,11 +282,14 @@ void my_eval_engine(const char* input, hazel_ctx_t* ctx, void* user_data) {
                             voices[vslot].idx = 0;
                             voices[vslot].phase_inc = pow(2.0, (semis + cents / 100.0) / 12.0);
                             
-                            // Apply velocity sensitivity
-                            float vel_norm = velocity / 127.0f;
-                            if (vel_norm < 0.001f) vel_norm = 0.001f;
-                            float factor = 1.0f - vel_sens + (vel_sens * vel_norm);
-                            factor = factor * factor; // Audio taper curve
+                            // Apply velocity sensitivity using the master LUT
+                            int int_vel = (int)velocity;
+                            if (int_vel < 0) int_vel = 0;
+                            if (int_vel > 127) int_vel = 127;
+                            
+                            float curve_val = master_vel_curve[int_vel];
+                            float factor = 1.0f - vel_sens + (vel_sens * curve_val);
+                            
                             voices[vslot].gain = powf(10.0f, gain_db / 20.0f) * factor;
                             
                             voices[vslot].atten = atten;
@@ -425,6 +430,10 @@ int main(int argc, char** argv) {
 
     // Initialize ksynth context
     ks_handle = ks_ctx_create();
+    for (int i = 0; i < 128; i++) {
+        float norm = i / 127.0f;
+        master_vel_curve[i] = norm * norm; // Default audio taper
+    }
 
     Fl::set_font(FL_COURIER, "DejaVu Sans Mono");
     hazel_app_t* app = hazel_create("KSynth", my_eval_engine, nullptr);
