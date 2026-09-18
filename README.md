@@ -1,42 +1,58 @@
 # KSynth-REPL
 
-An interactive, notebook-style REPL environment for [KSynth](https://github.com/octetta/k-synth), a fast, array-oriented audio programming language. 
+![KSynth-REPL Logo](logo.jpg)
 
-Built using FLTK, the Hazel UI framework, and Miniaudio, KSynth-REPL provides a live, interactive environment for algorithmic sound design, wave generation, and musical playback.
+**Version:** 0.1.0  
+**License:** MIT  
+**Copyright (c)** Joseph Stewart / Octetta  
 
-## Features
+KSynth-REPL is an interactive, notebook-style graphical coding environment built around the **k-synth** array language engine. It serves as a powerful bridge between low-level digital signal processing mathematics and a live-coding musical instrument. 
 
-- **Interactive Notebook Interface:** seamlessly mix markdown notes and KSynth code blocks.
-- **Batched Block Evaluation:** Execute entire blocks of audio generation code at once with automatic array-preview suppression to keep the console clean.
-- **Live Polyphonic Audio Engine:** An 8-voice polyphonic mixer powers instant, latency-free playback of your generated arrays.
-- **Pitch & Envelopes:** High-quality linear interpolation for pitch shifting (semitones/cents) and per-sample attenuation directly in the playback engine.
-- **Waveform Banking:** Store up to 128 generated waveforms in memory slots mapping to MIDI keys for complex playback orchestration.
-- **Braille Scope Viewer:** Visually inspect generated arrays in the REPL using an embedded ASCII Braille waveform grapher.
-- **Silent Macros:** Press `Alt + A` through `Alt + Z` to instantly and silently play the array stored in the corresponding variable.
+By separating executable code from markdown notes, and integrating a robust command system, KSynth-REPL enables you to instantly generate waveforms, visualize them, map them to MIDI keygroups, and shape their playback parameters—all in real-time.
 
-## Notebook Syntax
+---
 
-- **`//`** Starts a Note/Markdown block.
-- **`/`** Continues a Note/Markdown block.
-- **Normal lines** are evaluated as KSynth code.
-- **`\`** Lines starting with a backslash are intercepted as REPL commands (see below) before evaluation.
+## 🚀 Features
 
-## Slash Commands
+- **Interactive Notebook Editor**: Mix pure `k-synth` code blocks with rich Markdown documentation. 
+- **Dedicated Command Cells**: Lines starting with `\` automatically format into "Meta" command cells (distinct purple style) for audio routing and playback without triggering full array evaluations.
+- **Waveform Banking (128 Slots)**: Store up to 128 generated waveforms in memory slots that map directly to standard MIDI note numbers.
+- **Micro-Polyphony**: Built-in 8-voice polyphonic audio engine leveraging `miniaudio`.
+- **Advanced Playback Parameters**: Real-time control over semitone shifting, fine cents detuning, decibel (dB) gain staging, and sample attenuation.
+- **Programmable Velocity Curves**: Generate custom arrays in `k-synth` (linear, logarithmic, inverted) and route them as Look-Up Tables (LUTs) for dynamic velocity scaling.
+- **Silent Macro Bindings**: `Alt+A` to `Alt+Z` keyboard shortcuts instantly and silently play wavetables without cluttering your REPL console.
+
+---
+
+## 💻 Commands
+
+Commands are executed by typing a backslash `\` at the start of a line in the editor or terminal. 
+
+### Core Playback
 
 | Command | Description |
 |---|---|
-| `\? [var]` | View the ASCII braille waveform graph of a variable (e.g., `\? A`). |
-| `\p [var]` | Play the variable in Mono. |
-| `\ps [var]` | Play the variable in Stereo. |
-| `\pq [var]` | Quietly play the variable in Mono (no text output in the REPL). |
+| `\p [var]` | Play a variable immediately (e.g., `\p A`). |
+| `\pq [var]` | "Play Quiet" - Play a variable without echoing output to the REPL console. |
+| `\ps [var]` | Play a variable in Stereo mode. |
+| `\? [var]` | Explicitly visualize a variable using KSynth's Braille ASCII oscilloscope graph. |
+
+### Banking & Keygroups
+
+| Command | Description |
+|---|---|
 | `\b [0-127] [var] [opts]` | Bank a wave into a slot with default tuning/vol (e.g., `\b 60 A`). |
 | `\pb [0-127] [vel] [opts]` | Play a banked wave slot with optional velocity and overrides. |
+
+### Audio Configuration
+
+| Command | Description |
+|---|---|
 | `\mv [dB]` | Set the global master volume in decibels. |
 | `\vc [var]` | Load a 128-element array as the global velocity curve (LUT). |
 | `\l [file.ks]` | Load a KSynth file (handled by Hazel). |
-| `\w [ms]` | Wait for N milliseconds. |
-| `\s [var]` | Save the variable to a Mono WAV file (TBD). |
-| `\ss [var]` | Save the variable to a Stereo WAV file (TBD). |
+
+---
 
 ### Playback Parameters (`\pb` and `\b`)
 
@@ -48,41 +64,17 @@ When banking (`\b`) or playing (`\pb`), you can optionally define/override the f
 5. **`atten`** (default `1.0`): Per-sample linear decay.
 6. **`vel_sens`** (default `1.0`): Velocity sensitivity (0.0 = fixed volume, 1.0 = full range mapped via `\vc`).
 
-*Example:* `\b 36 A 0 0 0.0 1.0 0.0` banks a kick drum into slot 36 with `0.0` sensitivity (always loud).
-*Example:* `\pb 36 64` plays slot 36 at velocity 64. Because of the `0.0` sensitivity, it will still play at maximum volume.
+*Example:* `\b 36 A 0 0 0.0 1.0 0.0` banks a kick drum into slot 36 with `0.0` sensitivity (always loud).  
+*Example:* `\pb 36 64` plays slot 36 at velocity 64. Because of the `0.0` sensitivity, it will still play at maximum volume.  
 *Example:* `\mv -3.0` sets the global master volume to -3dB.
 
-## Building
+---
 
-Make sure you have CMake and FLTK installed, then run:
+## 🔮 Future Roadmap (Futures)
 
-```bash
-mkdir build && cd build
-cmake ..
-make -j$(nproc)
-./ksynth-repl
-```
+The KSynth-REPL is constantly evolving. Upcoming architectural targets include:
 
-## License
-
-MIT License
-
-Copyright (c) Joseph Stewart / Octetta
-
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
+- **UDP MIDI Event Listener**: Hooking up the engine to a local UDP port to receive live `Note On`/`Note Off` events, turning the REPL into a fully playable software instrument.
+- **Programmable Microtuning Maps (`\tm`)**: Similar to `\vc`, allowing the user to generate a 128-element frequency/pitch scalar array to define custom, non-12-TET musical scales (e.g., Just Intonation, Bohlen-Pierce).
+- **Array-driven Envelopes (`\env`)**: Replacing simple `attenuation` scalars with robust ADSR or custom envelope shapes defined entirely by arrays.
+- **Polyphonic Voice Stealing**: Intelligent routing of oldest-voice-stealing when exceeding the 8-voice maximum.
