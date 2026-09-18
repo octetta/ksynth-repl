@@ -30,22 +30,26 @@ Built using FLTK, the Hazel UI framework, and Miniaudio, KSynth-REPL provides a 
 | `\ps [var]` | Play the variable in Stereo. |
 | `\pq [var]` | Quietly play the variable in Mono (no text output in the REPL). |
 | `\b [0-127] [var] [opts]` | Bank a wave into a slot with default tuning/vol (e.g., `\b 60 A`). |
-| `\pb [0-127] [semi] [cents] [gain_db] [atten]` | Play a banked wave slot, optionally overriding defaults. |
+| `\pb [0-127] [vel] [opts]` | Play a banked wave slot with optional velocity and overrides. |
+| `\mv [dB]` | Set the global master volume in decibels. |
 | `\l [file.ks]` | Load a KSynth file (handled by Hazel). |
 | `\w [ms]` | Wait for N milliseconds. |
 | `\s [var]` | Save the variable to a Mono WAV file (TBD). |
 | `\ss [var]` | Save the variable to a Stereo WAV file (TBD). |
 
-### Playback Parameters (`\pb`)
+### Playback Parameters (`\pb` and `\b`)
 
-The `\pb` command allows for flexible sample playback on banked wavetables:
-- **`semis`** (default `0`): Pitch offset in semitones (e.g., `-12` for an octave down).
-- **`cents`** (default `0`): Fine pitch detuning in cents.
-- **`gain_db`** (default `0.0`): Starting amplitude in decibels (e.g., `-6.0` for half volume).
-- **`atten`** (default `1.0`): Per-sample decay multiplier (e.g., `0.9999` for a gradual fade).
+When banking (`\b`) or playing (`\pb`), you can optionally define/override the following parameters in order:
+1. **`velocity`** (only for `\pb`, default `127`): MIDI Velocity (1-127).
+2. **`semis`** (default `0`): Pitch offset in semitones.
+3. **`cents`** (default `0`): Fine pitch detuning.
+4. **`gain_db`** (default `0.0`): Base amplitude in dB (e.g., `-6.0`).
+5. **`atten`** (default `1.0`): Per-sample linear decay.
+6. **`vel_sens`** (default `1.0`): Velocity sensitivity curve (0.0 = fixed volume, 1.0 = fully dynamic).
 
-*Example:* `\b 60 A 0 0 -6.0 1.0` banks variable A into MIDI note 60 at -6dB.
-*Example:* `\pb 60 7 15.0 -6.0 0.999` plays slot 60 a perfect fifth up, slightly detuned, at -6dB, fading out quickly, overriding the bank's defaults.
+*Example:* `\b 36 A 0 0 0.0 1.0 0.0` banks a kick drum into slot 36 with `0.0` sensitivity (always loud).
+*Example:* `\pb 36 64` plays slot 36 at velocity 64. Because of the `0.0` sensitivity, it will still play at maximum volume.
+*Example:* `\mv -3.0` sets the global master volume to -3dB.
 
 ## Building
 

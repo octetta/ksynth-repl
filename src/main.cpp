@@ -10,6 +10,7 @@ extern "C" {
 #include "scope.h"
 
 uintptr_t ks_handle = 0;
+float master_vol_db = 0.0f;
 
 #define NUM_BANKS 128
 typedef struct {
@@ -19,6 +20,7 @@ typedef struct {
     float base_cents;
     float base_gain_db;
     float base_atten;
+    float base_vel_sens;
 } BankedWave;
 BankedWave banks[NUM_BANKS] = {0};
 
@@ -162,6 +164,11 @@ void cb(ma_device* d, void* o, const void* i, ma_uint32 n) {
     voices[v].idx = idx;
     voices[v].gain = gain;
   }
+  
+  float master_linear = powf(10.0f, master_vol_db / 20.0f);
+  for (ma_uint32 j = 0; j < n * 2; j++) {
+    out[j] *= master_linear;
+  }
 }
 
 ma_device_config cfg;
@@ -250,14 +257,16 @@ void my_eval_engine(const char* input, hazel_ctx_t* ctx, void* user_data) {
             
             if (p[1] == 'p' && p[2] == 'b') {
                 int slot = -1;
-                float semis = 0.0f, cents = 0.0f, gain_db = 0.0f, atten = 1.0f;
-                int parsed = sscanf(p + 3, "%d %f %f %f %f", &slot, &semis, &cents, &gain_db, &atten);
+                float velocity = 127.0f, semis = 0.0f, cents = 0.0f, gain_db = 0.0f, atten = 1.0f, vel_sens = 1.0f;
+                int parsed = sscanf(p + 3, "%d %f %f %f %f %f %f", &slot, &velocity, &semis, &cents, &gain_db, &atten, &vel_sens);
                 if (parsed >= 1 && slot >= 0 && slot < NUM_BANKS) {
                     if (banks[slot].buffer && banks[slot].length > 0) {
-                        if (parsed < 2) semis = banks[slot].base_semis;
-                        if (parsed < 3) cents = banks[slot].base_cents;
-                        if (parsed < 4) gain_db = banks[slot].base_gain_db;
-                        if (parsed < 5) atten = banks[slot].base_atten;
+                        if (parsed < 2) velocity = 127.0f;
+                        if (parsed < 3) semis = banks[slot].base_semis;
+                        if (parsed < 4) cents = banks[slot].base_cents;
+                        if (parsed < 5) gain_db = banks[slot].base_gain_db;
+                        if (parsed < 6) atten = banks[slot].base_atten;
+                        if (parsed < 7) vel_sens = banks[slot].base_vel_sens;
                         
                         int vslot = -1;
                         for (int i = 0; i < MAX_VOICES; i++) {
@@ -270,12 +279,19 @@ void my_eval_engine(const char* input, hazel_ctx_t* ctx, void* user_data) {
                             memcpy(voices[vslot].buffer, banks[slot].buffer, voices[vslot].n * sizeof(float));
                             voices[vslot].idx = 0;
                             voices[vslot].phase_inc = pow(2.0, (semis + cents / 100.0) / 12.0);
-                            voices[vslot].gain = powf(10.0f, gain_db / 20.0f);
+                            
+                            // Apply velocity sensitivity
+                            float vel_norm = velocity / 127.0f;
+                            if (vel_norm < 0.001f) vel_norm = 0.001f;
+                            float factor = 1.0f - vel_sens + (vel_sens * vel_norm);
+                            factor = factor * factor; // Audio taper curve
+                            voices[vslot].gain = powf(10.0f, gain_db / 20.0f) * factor;
+                            
                             voices[vslot].atten = atten;
                             voices[vslot].stereo = 0; // banks are mono for now
                             voices[vslot].active = 1;
                             char msg[128];
-                            snprintf(msg, sizeof(msg), "Playing bank %d (semi:%.1f, cents:%.1f, gain:%.1fdB, atten:%.4f)\n", slot, semis, cents, gain_db, atten);
+                            snprintf(msg, sizeof(msg), "Playing bank %d (vel:%.0f, semi:%.1f, gain:%.1fdB, sens:%.2f)\n", slot, velocity, semis, gain_db, vel_sens);
                             hazel_append_output(ctx, msg, 0);
                         } else {
                             hazel_append_output(ctx, "No free voice slots\n", 1);
@@ -336,10 +352,10 @@ void my_eval_engine(const char* input, hazel_ctx_t* ctx, void* user_data) {
             } else if (p[1] == 'b') {
                 int slot = -1;
                 char v_name = 0;
-                float semis = 0.0f, cents = 0.0f, gain_db = 0.0f, atten = 1.0f;
+                float semis = 0.0f, cents = 0.0f, gain_db = 0.0f, atten = 1.0f, vel_sens = 1.0f;
                 char* arg = p + 2;
                 while (*arg == ' ') arg++;
-                int parsed = sscanf(arg, "%d %c %f %f %f %f", &slot, &v_name, &semis, &cents, &gain_db, &atten);
+                int parsed = sscanf(arg, "%d %c %f %f %f %f %f", &slot, &v_name, &semis, &cents, &gain_db, &atten, &vel_sens);
                 if (parsed >= 2 && slot >= 0 && slot < NUM_BANKS) {
                     int r = ks_ctx_get_var(ks_handle, v_name);
                     float* buf = ks_ctx_get_var_buf(ks_handle);
@@ -352,8 +368,9 @@ void my_eval_engine(const char* input, hazel_ctx_t* ctx, void* user_data) {
                         banks[slot].base_cents = cents;
                         banks[slot].base_gain_db = gain_db;
                         banks[slot].base_atten = atten;
+                        banks[slot].base_vel_sens = vel_sens;
                         char msg[128];
-                        snprintf(msg, sizeof(msg), "Banked %c into slot %d (semi:%.1f, cents:%.1f, gain:%.1fdB, atten:%.4f)\n", v_name, slot, semis, cents, gain_db, atten);
+                        snprintf(msg, sizeof(msg), "Banked %c into slot %d (semi:%.1f, gain:%.1fdB, sens:%.2f)\n", v_name, slot, semis, gain_db, vel_sens);
                         hazel_append_output(ctx, msg, 0);
                     } else {
                         hazel_append_output(ctx, "Variable empty or invalid\n", 1);
