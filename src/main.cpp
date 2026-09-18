@@ -408,6 +408,8 @@ int main(int argc, char** argv) {
     config.markdown_bg = fl_rgb_color(245, 245, 255);
     config.error_fg = FL_DARK_RED;
     config.markdown_fg = FL_DARK_GREEN;
+    config.command_bg = fl_rgb_color(250, 240, 255);
+    config.command_fg = fl_rgb_color(90, 0, 150);
     config.cursor_fg = FL_WHITE;
     config.cursor_bg = FL_BLACK;
     config.select_bg = fl_rgb_color(180, 200, 255);
