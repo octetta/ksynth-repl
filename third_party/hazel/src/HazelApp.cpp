@@ -35,7 +35,11 @@ public:
                 HazelApp* app = (HazelApp*)v;
                 const char* lbl = w->label();
                 char cmd[16];
-                snprintf(cmd, sizeof(cmd), "_MC%s", lbl);
+                if (app->getConfig().parser_mode == 2) {
+                    snprintf(cmd, sizeof(cmd), "\\pq %s", lbl);
+                } else {
+                    snprintf(cmd, sizeof(cmd), "_MC%s", lbl);
+                }
                 hazel_ctx_t* term_ctx = new hazel_ctx_t();
                 memset(term_ctx, 0, sizeof(hazel_ctx_t));
                 term_ctx->app = app;
