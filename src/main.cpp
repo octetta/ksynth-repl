@@ -476,7 +476,7 @@ int main(int argc, char** argv) {
              config.udp_port, config.events_port);
     hazel_set_status(app, status_str);
 
-    hazel_set_app_version(app, "KSynth-REPL\nEngine: KSynth");
+    hazel_set_app_version(app, "KSynth-REPL v0.1.0\nEngine: KSynth");
     
     if (file_to_load) {
         hazel_load_file(app, file_to_load);
