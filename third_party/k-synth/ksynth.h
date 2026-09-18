@@ -1,0 +1,122 @@
+/* =========================================================================
+ * KSYNTH API
+ *
+ * An array-oriented, right-associative DSP language and evaluation engine.
+ * * Architecture:
+ * - K Struct: Represents a vector of doubles. Contains a refcount (r),
+ * length (n), and a flexible array member (f) for the payload. Length
+ * -1 indicates a function object.
+ * * Memory Model:
+ * - Arena (Bump Allocator): Fast, temporary allocations used for all
+ * intermediate vectors during a single `ks_eval` pass. The entire arena
+ * is instantly reset when evaluation finishes. Audio-thread safe (no GC).
+ * - Persistent: Standard `malloc` is used strictly for long-lived user
+ * variables (A-Z) to survive across `ks_eval` calls.
+ * ========================================================================= */
+
+#ifndef KSYNTH_H
+#define KSYNTH_H
+
+#include <stdlib.h>
+#include <string.h>
+#include <setjmp.h>
+#include <stdint.h>
+
+typedef enum {
+    KS_OK = 0,
+    KS_ERR_SYNTAX,       /* Malformed ksynth code */
+    KS_ERR_OOM,          /* Memory budget exceeded */
+    KS_ERR_GAS,          /* Execution time (gas) limit reached */
+    KS_ERR_SIGSEGV,      /* Reserved: hardware faults are not caught */
+    KS_ERR_SIGFPE,       /* Reserved: hardware faults are not caught */
+    KS_ERR_SIGILL,       /* Reserved: hardware faults are not caught */
+    KS_ERR_INVALID_ARGS, /* Invalid function arguments */
+    KS_ERR_INTERNAL      /* Unexpected internal error */
+} ks_status;
+
+typedef struct ks_val { int r, n; double f[]; } *K;
+
+typedef struct ks_ctx {
+    K vars[26];          /* A-Z user variables (persistent, malloc'd) */
+    K args[2];           /* x, y function arguments (arena) */
+
+    /* Eval-scoped bump allocator for temporary K objects */
+    char  *arena_base;   /* Start of arena block */
+    char  *arena_ptr;    /* Current bump position */
+    char  *arena_end;    /* One past end of arena block */
+
+    size_t mem_limit;    /* Arena size (bytes); set at ks_create time */
+
+    long long gas_limit; /* Max operations allowed for evaluation */
+    long long gas_used;  /* Current operations consumed */
+
+    jmp_buf recover;     /* Eval-local escape for explicit checked errors */
+    ks_status last_status;
+    char last_err_msg[256];
+    
+    double sample_rate;  /* Passed from host, returned by p0 */
+} ks_ctx;
+
+/* Context Lifecycle */
+ks_ctx* ks_create(size_t mem_limit, long long gas_limit, double sample_rate);
+void ks_destroy(ks_ctx *ctx);
+void ks_clear_vars(ks_ctx *ctx);
+
+/* Evaluation API */
+K ks_eval(ks_ctx *ctx, const char *code, size_t len);
+const char* ks_strerror(ks_status status);
+ks_status ks_bind_vector(ks_ctx *ctx, char name, const double *values,
+                         size_t length);
+
+/* Internal-ish K Lifecycle */
+K k_new(ks_ctx *ctx, int n);       /* arena-allocated (eval lifetime) */
+K k_new_perm(ks_ctx *ctx, int n);  /* malloc'd (persists across evals, e.g. vars) */
+void k_free(ks_ctx *ctx, K x);     /* no-op for arena objects; refcount-free for perm objects */
+
+/* Function support */
+K k_func(ks_ctx *ctx, char *body);
+K k_call(ks_ctx *ctx, K fn, K *call_args, int nargs);
+int k_is_func(K x);
+char* k_func_body(K x);
+
+/* C API Integration */
+K k_view(ks_ctx *ctx, int n, double *ptr);
+void bind_scalar(ks_ctx *ctx, char name, double val);
+K k_get(ks_ctx *ctx, char name);
+
+/* Output Helper */
+void p(ks_ctx *ctx, K x);
+
+/* Wrapper API (context handle based, suitable for WebAssembly and embedders) */
+uintptr_t ks_ctx_create(void);
+void ks_ctx_destroy(uintptr_t handle);
+int ks_ctx_run(uintptr_t handle, const char *script);
+int ks_ctx_repl(uintptr_t handle, const char *expr);
+const char *ks_ctx_repl_str(uintptr_t handle);
+int ks_ctx_get_var(uintptr_t handle, int letter_upper);
+float *ks_ctx_get_var_buf(uintptr_t handle);
+int ks_ctx_repl_length(uintptr_t handle);
+int ks_ctx_repl_get_floats(uintptr_t handle, float *out, int max_n);
+float *ks_ctx_get_buffer(uintptr_t handle);
+int ks_ctx_get_length(uintptr_t handle);
+const char *ks_ctx_get_error(uintptr_t handle);
+
+/* Legacy singleton wrappers (kept for compatibility) */
+void ks_init(void);
+int ks_run(const char *script);
+int ks_repl(const char *expr);
+const char *ks_repl_str(void);
+int ks_get_var(int letter_upper);
+float *ks_get_var_buf(void);
+int ks_repl_length(void);
+int ks_repl_get_floats(float *out, int max_n);
+float *ks_get_buffer(void);
+int ks_get_length(void);
+const char *ks_get_error(void);
+
+#endif
+
+/*
+Copyright (c) 2026 octetta / Joseph Stewart
+MIT LICENSE AT https://github.com/octetta/k-synth
+*/
