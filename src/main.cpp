@@ -93,6 +93,7 @@ int my_dir_cb(hazel_app_t* app, const char* dirpath, void* user_data) {
 
 
 #include "miniaudio.h"
+#include "scope-ipc.h"
 
 #define MAX_VOICES 8
 
@@ -170,6 +171,20 @@ void cb(ma_device* d, void* o, const void* i, ma_uint32 n) {
   float master_linear = powf(10.0f, master_vol_db / 20.0f);
   for (ma_uint32 j = 0; j < n * 2; j++) {
     out[j] *= master_linear;
+  }
+  
+  if (scope_ipc_active()) {
+      synth_record_bus_t* bus = scope_ipc_begin_block(n);
+      if (bus) {
+          for (ma_uint32 i = 0; i < n; i++) {
+              bus->frames[i * bus->channels + 0] = out[i * 2 + 0];
+              bus->frames[i * bus->channels + 1] = out[i * 2 + 1];
+              for (int c = 2; c < bus->channels; c++) {
+                  bus->frames[i * bus->channels + c] = 0.0f;
+              }
+          }
+          scope_ipc_publish(bus->frames, n);
+      }
   }
 }
 
@@ -417,9 +432,14 @@ void my_eval_engine(const char* input, hazel_ctx_t* ctx, void* user_data) {
 int main(int argc, char** argv) {
     int udp_port = -1;
     int events_port = -1;
+    bool enable_scope = false;
     const char* file_to_load = nullptr;
 
     for (int i=1; i<argc; i++) {
+        if (strcmp(argv[i], "--scope") == 0 || strcmp(argv[i], "-s") == 0) {
+            enable_scope = true;
+            continue;
+        }
         if (argv[i][0] == '-') {
             if (argv[i][1] == 'e') events_port = atoi(&argv[i][2]);
             else if (argv[i][1] == 'p') udp_port = atoi(&argv[i][2]);
@@ -480,6 +500,13 @@ int main(int argc, char** argv) {
     
     if (file_to_load) {
         hazel_load_file(app, file_to_load);
+    }
+    
+    if (enable_scope) {
+        if (scope_ipc_init(4096, 48000) == 0) {
+            scope_ipc_start("ksynth-scope", SKRED_SCOPE_ALL_CHANNELS, 1.0);
+            printf("Scope IPC started as ksynth-scope\n");
+        }
     }
     
     audio_start();
