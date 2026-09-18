@@ -21,11 +21,9 @@ typedef struct {
     unsigned int output_bg;
     unsigned int error_bg;
     unsigned int markdown_bg;
-    unsigned int command_bg;
     unsigned int text_fg;
     unsigned int error_fg;
     unsigned int markdown_fg;
-    unsigned int command_fg;
     unsigned int cursor_fg;
     unsigned int cursor_bg;
     unsigned int select_bg;
@@ -38,6 +36,8 @@ typedef struct {
     const char* startup_text;
     const char* help_extension_html;
     const char* (*help_extension_cb)(const char* path);
+    unsigned int command_bg;
+    unsigned int command_fg;
 } hazel_config_t;
 
 void hazel_set_config(hazel_app_t* app, const hazel_config_t* config);

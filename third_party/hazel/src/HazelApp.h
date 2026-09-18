@@ -78,7 +78,7 @@ public:
     void setPendingStyle(char s) { pending_style_ = s; }
     char getPendingStyle() const { return pending_style_; }
     bool isOutputStyle(char s) const {
-        return s != 'A' && s != 'D' && s != 0;
+        return s != 'A' && s != 'D' && s != 'E' && s != 0;
     }
     void loadFile(const char* filepath);
     void saveFileAs(const char* filepath);

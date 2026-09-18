@@ -1366,8 +1366,9 @@ void HazelEditor::draw() {
             
             if (line_start == line_end) {
                 char p = getEffectiveStyleAt(bg_pos);
-                if (p == 'D' || app_->isOutputStyle(p)) {
+                if (p == 'D' || p == 'E' || app_->isOutputStyle(p)) {
                     if (p == 'D') fl_color(fl_rgb_color(240, 255, 240));
+                    else if (p == 'E') fl_color(app_->getConfig().command_bg);
                     else if (p == 'B') fl_color(fl_rgb_color(240, 240, 245));
                     else if (p == 'C') fl_color(fl_rgb_color(255, 230, 230));
                     
@@ -1524,6 +1525,7 @@ void HazelApp::updateStatusBar(bool force) {
     
     const char* mode = "Code";
     if (style == 'D') mode = (config_.parser_mode > 0) ? "Note" : "Markdown";
+    else if (style == 'E') mode = "Meta";
     else if (isOutputStyle(style)) mode = "Output";
     
     char target_block = isOutputStyle(style) ? 'B' : style;
