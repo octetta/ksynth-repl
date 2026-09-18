@@ -10,7 +10,7 @@ Built using FLTK, the Hazel UI framework, and Miniaudio, KSynth-REPL provides a 
 - **Batched Block Evaluation:** Execute entire blocks of audio generation code at once with automatic array-preview suppression to keep the console clean.
 - **Live Polyphonic Audio Engine:** An 8-voice polyphonic mixer powers instant, latency-free playback of your generated arrays.
 - **Pitch & Envelopes:** High-quality linear interpolation for pitch shifting (semitones/cents) and per-sample attenuation directly in the playback engine.
-- **Waveform Banking:** Store up to 16 generated waveforms in memory slots for complex playback orchestration.
+- **Waveform Banking:** Store up to 128 generated waveforms in memory slots mapping to MIDI keys for complex playback orchestration.
 - **Braille Scope Viewer:** Visually inspect generated arrays in the REPL using an embedded ASCII Braille waveform grapher.
 - **Silent Macros:** Press `Alt + A` through `Alt + Z` to instantly and silently play the array stored in the corresponding variable.
 
@@ -29,8 +29,8 @@ Built using FLTK, the Hazel UI framework, and Miniaudio, KSynth-REPL provides a 
 | `\p [var]` | Play the variable in Mono. |
 | `\ps [var]` | Play the variable in Stereo. |
 | `\pq [var]` | Quietly play the variable in Mono (no text output in the REPL). |
-| `\b [0-15] [var]` | Bank a variable into one of the 16 wavetable slots (e.g., `\b 0 A`). |
-| `\pb [0-15] [semis] [cents] [gain] [atten]` | Play a banked wave slot with optional playback parameters. |
+| `\b [0-127] [var] [opts]` | Bank a wave into a slot with default tuning/vol (e.g., `\b 60 A`). |
+| `\pb [0-127] [semi] [cents] [gain_db] [atten]` | Play a banked wave slot, optionally overriding defaults. |
 | `\l [file.ks]` | Load a KSynth file (handled by Hazel). |
 | `\w [ms]` | Wait for N milliseconds. |
 | `\s [var]` | Save the variable to a Mono WAV file (TBD). |
@@ -41,10 +41,11 @@ Built using FLTK, the Hazel UI framework, and Miniaudio, KSynth-REPL provides a 
 The `\pb` command allows for flexible sample playback on banked wavetables:
 - **`semis`** (default `0`): Pitch offset in semitones (e.g., `-12` for an octave down).
 - **`cents`** (default `0`): Fine pitch detuning in cents.
-- **`gain`** (default `1.0`): Starting amplitude multiplier.
+- **`gain_db`** (default `0.0`): Starting amplitude in decibels (e.g., `-6.0` for half volume).
 - **`atten`** (default `1.0`): Per-sample decay multiplier (e.g., `0.9999` for a gradual fade).
 
-*Example:* `\pb 0 7 15.0 0.5 0.999` plays slot 0 a perfect fifth up, slightly detuned, at half volume, fading out quickly.
+*Example:* `\b 60 A 0 0 -6.0 1.0` banks variable A into MIDI note 60 at -6dB.
+*Example:* `\pb 60 7 15.0 -6.0 0.999` plays slot 60 a perfect fifth up, slightly detuned, at -6dB, fading out quickly, overriding the bank's defaults.
 
 ## Building
 
