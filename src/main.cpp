@@ -414,6 +414,53 @@ void my_eval_engine(const char* input, hazel_ctx_t* ctx, void* user_data) {
                         hazel_append_output(ctx, "Variable not found or empty\n", 1);
                     }
                 }
+            } else if (p[1] == 'm' && p[2] == 'v') {
+                float db = 0.0f;
+                if (sscanf(p + 3, "%f", &db) == 1) {
+                    master_vol_db = db;
+                    char msg[64];
+                    snprintf(msg, sizeof(msg), "Master volume set to %.1fdB\n", db);
+                    hazel_append_output(ctx, msg, 0);
+                } else {
+                    hazel_append_output(ctx, "Usage: \\mv [dB]\n", 1);
+                }
+            } else if (p[1] == 'v' && p[2] == 'c') {
+                char v_name = get_var(p + 3);
+                if (v_name) {
+                    int r = ks_ctx_get_var(ks_handle, v_name);
+                    float* buf = ks_ctx_get_var_buf(ks_handle);
+                    if (r >= 128 && buf) {
+                        for (int i = 0; i < 128; i++) {
+                            master_vel_curve[i] = buf[i];
+                        }
+                        char msg[64];
+                        snprintf(msg, sizeof(msg), "Loaded global velocity curve from %c\n", v_name);
+                        hazel_append_output(ctx, msg, 0);
+                    } else {
+                        hazel_append_output(ctx, "Array must be at least 128 elements long\n", 1);
+                    }
+                } else {
+                    hazel_append_output(ctx, "Usage: \\vc [A-Z]\n", 1);
+                }
+            } else if (p[1] == 's' && p[2] == 'g') {
+                if (scope_ipc_init(4096, 48000) == 0) {
+                    if (scope_ipc_start("ksynth-scope", SKRED_SCOPE_ALL_CHANNELS, 1.0) == 0) {
+                        hazel_append_output(ctx, "Scope IPC Started (ksynth-scope)\n", 0);
+                    } else {
+                        hazel_append_output(ctx, "Failed to start Scope IPC\n", 1);
+                    }
+                } else {
+                    hazel_append_output(ctx, "Failed to init Scope IPC\n", 1);
+                }
+            } else if (p[1] == 's' && p[2] == 's') {
+                scope_ipc_stop();
+                hazel_append_output(ctx, "Scope IPC Stopped\n", 0);
+            } else if (p[1] == 's' && p[2] == '?') {
+                if (scope_ipc_active()) {
+                    hazel_append_output(ctx, "Scope IPC is ACTIVE (ksynth-scope)\n", 0);
+                } else {
+                    hazel_append_output(ctx, "Scope IPC is INACTIVE\n", 0);
+                }
             }
         } else if (p[0] != '/' && p[0] != '\0') {
             if (strlen(block_buf) + strlen(p) + 2 < sizeof(block_buf)) {
