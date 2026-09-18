@@ -62,7 +62,7 @@ int my_save_cb(hazel_app_t* app, const char* filepath, void* user_data) {
         int len = strlen(text);
         for (int i = 0; i < len; i++) {
             char s = styles[i];
-            if (s == 'A' || s == 'D') {
+            if (s == 'A' || s == 'D' || s == 'E') {
                 fprintf(f, "%c", text[i]);
             }
         }

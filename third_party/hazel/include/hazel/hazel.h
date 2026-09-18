@@ -21,9 +21,11 @@ typedef struct {
     unsigned int output_bg;
     unsigned int error_bg;
     unsigned int markdown_bg;
+    unsigned int command_bg;
     unsigned int text_fg;
     unsigned int error_fg;
     unsigned int markdown_fg;
+    unsigned int command_fg;
     unsigned int cursor_fg;
     unsigned int cursor_bg;
     unsigned int select_bg;

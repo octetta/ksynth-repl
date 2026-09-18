@@ -341,6 +341,7 @@ static void style_update_cb(int pos, int nInserted, int nDeleted, int nRestyled,
             
             bool starts_with_hash_hash = false;
             bool starts_with_hash = false;
+            bool is_command = false;
             
             int len = line_end - line_start;
             if (app->getConfig().parser_mode == 2) {
@@ -348,6 +349,8 @@ static void style_update_cb(int pos, int nInserted, int nDeleted, int nRestyled,
                     starts_with_hash_hash = true;
                 } else if (len >= 1 && buffer->char_at(line_start) == '/') {
                     starts_with_hash = true;
+                } else if (len >= 1 && buffer->char_at(line_start) == '\\') {
+                    is_command = true;
                 }
             } else {
                 if (len >= 2 && buffer->char_at(line_start) == '#' && buffer->char_at(line_start + 1) == '#') {
@@ -362,6 +365,9 @@ static void style_update_cb(int pos, int nInserted, int nDeleted, int nRestyled,
             } else if (!starts_with_hash) {
                 in_comment = false;
             }
+            if (is_command) {
+                in_comment = false;
+            }
             
             for (int j = line_start; j <= line_end && j < length; j++) {
                 char current_s = style_buf->char_at(j);
@@ -374,7 +380,8 @@ static void style_update_cb(int pos, int nInserted, int nDeleted, int nRestyled,
                     j--; 
                     in_comment = false;
                 } else {
-                    new_styles[j] = in_comment ? 'D' : 'A';
+                    if (is_command) new_styles[j] = 'E';
+                    else new_styles[j] = in_comment ? 'D' : 'A';
                 }
             }
             i = line_end + 1;
@@ -405,8 +412,8 @@ static void style_update_cb(int pos, int nInserted, int nDeleted, int nRestyled,
             target_style = app->getPendingStyle();
             app->setPendingStyle(0);
         } else {
-            if (curr == 'A' || curr == 'D') target_style = curr;
-            else if (prev == 'A' || prev == 'D') target_style = prev;
+            if (curr == 'A' || curr == 'D' || curr == 'E') target_style = curr;
+            else if (prev == 'A' || prev == 'D' || prev == 'E') target_style = prev;
         }
         
         std::string styles(nInserted, target_style);
@@ -714,9 +721,9 @@ int HazelEditor::handle(int event) {
             if (key == 'c' || key == 'x') {
                 int pos = insert_position();
                 char style = app_->getStyleAt(pos);
-                if (style != 'A' && style != 'D' && pos > 0) {
+                if (style != 'A' && style != 'D' && style != 'E' && pos > 0) {
                     char left = app_->getStyleAt(pos - 1);
-                    if (left == 'A' || left == 'D') {
+                    if (left == 'A' || left == 'D' || left == 'E') {
                         pos = pos - 1;
                         style = left;
                     }
@@ -822,9 +829,11 @@ HazelApp::HazelApp(const char* title, hazel_eval_cb_t cb, void* user_data)
     config_.output_bg = fl_rgb_color(245, 245, 250);
     config_.error_bg = fl_rgb_color(255, 235, 235);
     config_.markdown_bg = fl_rgb_color(245, 255, 245);
+    config_.command_bg = fl_rgb_color(250, 240, 255); // light purple
     config_.text_fg = FL_BLACK;
     config_.error_fg = FL_DARK_RED;
     config_.markdown_fg = FL_DARK_GREEN;
+    config_.command_fg = fl_rgb_color(90, 0, 150); // dark purple
     config_.cursor_fg = FL_WHITE;
     config_.cursor_bg = FL_BLACK;
     config_.select_bg = fl_rgb_color(180, 200, 255);
@@ -1013,15 +1022,15 @@ void HazelApp::evaluateCurrentBlock() {
     int pos = editor_->insert_position();
     char style = getStyleAt(pos);
     
-    if (style != 'A' && style != 'D' && pos > 0) {
+    if (style != 'A' && style != 'D' && style != 'E' && pos > 0) {
         char left = getStyleAt(pos - 1);
-        if (left == 'A' || left == 'D') {
+        if (left == 'A' || left == 'D' || left == 'E') {
             pos = pos - 1;
             style = left;
         }
     }
     
-    if (style != 'A' && style != 'D') return; 
+    if (style != 'A' && style != 'D' && style != 'E') return; 
     
     int start = pos;
     while (start > 0 && style_buffer_->char_at(start - 1) == style) start--;
@@ -1239,19 +1248,22 @@ void HazelApp::startRunAll() {
             while (block_start > 0 && getStyleAt(block_start - 1) == 'A') block_start--;
         } else if (s == 'D') {
             while (block_start > 0 && getStyleAt(block_start - 1) == 'D') block_start--;
+        } else if (s == 'E') {
+            while (block_start > 0 && getStyleAt(block_start - 1) == 'E') block_start--;
         }
     }
     
     editor_->insert_position(block_start);
-    if (getStyleAt(block_start) != 'A') {
+    if (getStyleAt(block_start) != 'A' && getStyleAt(block_start) != 'E') {
         int search = block_start;
-        while (search < buffer_->length() && getStyleAt(search) != 'A') search++;
+        while (search < buffer_->length() && getStyleAt(search) != 'A' && getStyleAt(search) != 'E') search++;
         editor_->insert_position(search);
     }
     
     highest_modified_pos_ = -1; // Reset since we are running!
     
-    if (getStyleAt(editor_->insert_position()) == 'A') {
+    char init_s = getStyleAt(editor_->insert_position());
+    if (init_s == 'A' || init_s == 'E') {
         run_all_pending_ = true;
         evaluateCurrentBlock();
     }
@@ -1269,7 +1281,7 @@ void HazelApp::finishEvaluation(hazel_ctx_t* ctx) {
         int search = ctx->insert_pos;
         while (search < buffer_->length()) {
             char s = getStyleAt(search);
-            if (s == 'A' || s == 'D') {
+            if (s == 'A' || s == 'D' || s == 'E') {
                 editor_->insert_position(search);
                 editor_->show_insert_position();
                 break;
@@ -1282,12 +1294,12 @@ void HazelApp::finishEvaluation(hazel_ctx_t* ctx) {
         int pos = editor_->insert_position();
         char style = getStyleAt(pos);
         
-        if (style == 'A' || style == 'D') {
+        if (style == 'A' || style == 'D' || style == 'E') {
             int end = pos;
             while (end < buffer_->length() && getStyleAt(end) == style) end++;
             
             // A cell is considered empty if it contains just a trailing newline scaffold at the EOF.
-            if (style == 'A' && end - pos <= 1 && end >= buffer_->length()) {
+            if ((style == 'A' || style == 'E') && end - pos <= 1 && end >= buffer_->length()) {
                 run_all_pending_ = false;
                 
                 editor_->insert_position(buffer_->length());
@@ -1331,9 +1343,9 @@ void HazelEditor::draw() {
         if (is_empty_line) {
             if (p == insert_position() && app_->getPendingStyle() != 0) return app_->getPendingStyle();
             char p_curr = app_->getStyleAt(p);
-            if (p_curr == 'A' || p_curr == 'D' || p_curr == 'C' || p_curr == 'B') return p_curr;
+            if (p_curr == 'A' || p_curr == 'D' || p_curr == 'E' || p_curr == 'C' || p_curr == 'B') return p_curr;
             char p_prev = (p > 0) ? app_->getStyleAt(p - 1) : '\0';
-            if (p_prev == 'A' || p_prev == 'D' || p_prev == 'C' || p_prev == 'B') return p_prev;
+            if (p_prev == 'A' || p_prev == 'D' || p_prev == 'E' || p_prev == 'C' || p_prev == 'B') return p_prev;
             return 'A';
         }
         char s = app_->getStyleAt(p);
@@ -1574,6 +1586,7 @@ void HazelApp::applyConfig() {
     styletable_[1] = { (Fl_Color)config_.text_fg, config_.font, config_.font_size, Fl_Text_Display::ATTR_BGCOLOR_EXT, (Fl_Color)config_.output_bg };
     styletable_[2] = { (Fl_Color)config_.error_fg, config_.font, config_.font_size, Fl_Text_Display::ATTR_BGCOLOR_EXT, (Fl_Color)config_.error_bg };
     styletable_[3] = { (Fl_Color)config_.markdown_fg, config_.font, config_.font_size, Fl_Text_Display::ATTR_BGCOLOR_EXT, (Fl_Color)config_.markdown_bg };
+    styletable_[4] = { (Fl_Color)config_.command_fg, config_.font, config_.font_size, Fl_Text_Display::ATTR_BGCOLOR_EXT, (Fl_Color)config_.command_bg };
 }
 
 void HazelApp::setConfig(const hazel_config_t* config) {
@@ -1584,7 +1597,7 @@ void HazelApp::setConfig(const hazel_config_t* config) {
     // Only apply startup text if buffer is completely empty
     if (config_.startup_text && buffer_->length() == 0) {
         buffer_->text(config_.startup_text);
-        std::string start_styles(strlen(config_.startup_text), 'D');
+        std::string start_styles(strlen(config_.startup_text), (config_.parser_mode == 2) ? 'A' : 'D');
         style_buffer_->text(start_styles.c_str());
         buffer_->append("\n");
         style_buffer_->append("A");

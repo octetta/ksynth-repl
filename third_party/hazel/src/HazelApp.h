@@ -132,7 +132,7 @@ private:
     
     
     Fl_Text_Display::Style_Table_Entry styletable_[256];
-    int next_style_index_ = 4;
+    int next_style_index_ = 5;
     char getAnsiStyle(unsigned int fg, unsigned int bg, bool is_error);
     hazel_config_t config_;
     void applyConfig();
