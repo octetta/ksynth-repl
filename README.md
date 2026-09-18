@@ -50,6 +50,7 @@ Commands are executed by typing a backslash `\` at the start of a line in the ed
 |---|---|
 | `\mv [dB]` | Set the global master volume in decibels. |
 | `\vc [var]` | Load a 128-element array as the global velocity curve (LUT). |
+| `\sg`, `\ss`, `\s?` | Scope IPC Start (`g`), Stop (`s`), and Status (`?`). |
 | `\l [file.ks]` | Load a KSynth file (handled by Hazel). |
 
 ---
