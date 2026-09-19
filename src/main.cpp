@@ -444,7 +444,7 @@ void my_eval_engine(const char* input, hazel_ctx_t* ctx, void* user_data) {
                 }
             } else if (p[1] == 's' && p[2] == 'g') {
                 if (scope_ipc_init(4096, 48000) == 0) {
-                    if (scope_ipc_start("ksynth-scope", SKRED_SCOPE_ALL_CHANNELS, 1.0) == 0) {
+                    if (scope_ipc_start(SKRED_SCOPE_DEFAULT_NAME, SKRED_SCOPE_ALL_CHANNELS, 1.0) == 0) {
                         hazel_append_output(ctx, "Scope IPC Started (ksynth-scope)\n", 0);
                     } else {
                         hazel_append_output(ctx, "Failed to start Scope IPC\n", 1);
@@ -551,7 +551,7 @@ int main(int argc, char** argv) {
     
     if (enable_scope) {
         if (scope_ipc_init(4096, 48000) == 0) {
-            scope_ipc_start("ksynth-scope", SKRED_SCOPE_ALL_CHANNELS, 1.0);
+            scope_ipc_start(SKRED_SCOPE_DEFAULT_NAME, SKRED_SCOPE_ALL_CHANNELS, 1.0);
             printf("Scope IPC started as ksynth-scope\n");
         }
     }
