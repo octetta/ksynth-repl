@@ -10,7 +10,7 @@ extern "C" {
 #include "scope.h"
 
 uintptr_t ks_handle = 0;
-float master_vol_db = 0.0f;
+float master_vol_db = -12.0f; // Headroom for polyphony
 float master_vel_curve[128];
 bool vel_curve_initialized = false;
 
@@ -211,6 +211,9 @@ void cb(ma_device* d, void* o, const void* i, ma_uint32 n) {
   float master_linear = powf(10.0f, master_vol_db / 20.0f);
   for (ma_uint32 j = 0; j < n * 2; j++) {
     out[j] *= master_linear;
+    // Hard clip at +/- 1.0f to prevent digital wrap/crackle if they still exceed
+    if (out[j] > 1.0f) out[j] = 1.0f;
+    else if (out[j] < -1.0f) out[j] = -1.0f;
   }
   
   if (scope_ipc_active()) {
