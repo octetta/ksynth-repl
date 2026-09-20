@@ -270,7 +270,8 @@ const char* ksynth_help_as_html(const char* ext) {
            "<h3>Slash Commands</h3>"
            "<ul>"
            "<li><b>\\? [var]</b> - View variable waveform graph</li>\n           <li><b>\\p [var]</b> - Play the variable (Mono)</li>"
-           "<li><b>\\b [0-127] [var]</b> - Bank a variable into slot 0-15</li>"
+           "<li><b>\\b [0-127] [var]</b> - Bank a variable into a specific slot</li>"
+           "<li><b>\\bm [var] [base_note]</b> - Bank a variable across ALL MIDI notes, pitched relative to base_note (e.g. 60)</li>"
            "<li><b>\\pb [0-15] [semi] [cents] [gain] [atten]</b> - Play bank (optional params)</li>"
            "<li><b>\\ps [var]</b> - Play the variable (Stereo)</li>"
            "<li><b>\\l [file]</b> - Load a file (handled by Hazel)</li>\n           <li><b>\\ra [var] [path]</b> - Read audio file into variable</li>"
@@ -365,6 +366,37 @@ void my_eval_engine(const char* input, hazel_ctx_t* ctx, void* user_data) {
                     }
                 } else {
                     hazel_append_output(ctx, "Invalid bank slot\n", 1);
+                }
+            } else if (p[1] == 'b' && p[2] == 'm') {
+                char v_name[256];
+                int base_note = 60;
+                float gain_db = 0.0f;
+                float atten = 1.0f;
+                float vel_sens = 1.0f;
+                int parsed = sscanf(p + 3, "%255s %d %f %f %f", v_name, &base_note, &gain_db, &atten, &vel_sens);
+                if (parsed >= 1) {
+                    int r = ks_ctx_get_var_str(ks_handle, v_name);
+                    float* buf = ks_ctx_get_var_buf(ks_handle);
+                    if (r > 0 && buf) {
+                        for (int i = 0; i < NUM_BANKS; i++) {
+                            if (banks[i].buffer) free(banks[i].buffer);
+                            banks[i].buffer = (float*)malloc(r * sizeof(float));
+                            memcpy(banks[i].buffer, buf, r * sizeof(float));
+                            banks[i].length = r;
+                            banks[i].base_semis = (float)(i - base_note);
+                            banks[i].base_cents = 0.0f;
+                            banks[i].base_gain_db = gain_db;
+                            banks[i].base_atten = atten;
+                            banks[i].base_vel_sens = vel_sens;
+                        }
+                        char msg[128];
+                        snprintf(msg, sizeof(msg), "Banked %s across all %d MIDI notes (Base Note: %d)\n", v_name, NUM_BANKS, base_note);
+                        hazel_append_output(ctx, msg, 0);
+                    } else {
+                        hazel_append_output(ctx, "Variable empty or invalid\n", 1);
+                    }
+                } else {
+                    hazel_append_output(ctx, "Invalid bank map command (use: \\bm [A-Z] [base_note])\n", 1);
                 }
             } else if (p[1] == 'r' && p[2] == 'a') {
                 char v_name[256];
