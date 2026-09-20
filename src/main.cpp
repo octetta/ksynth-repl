@@ -173,9 +173,7 @@ void cb(ma_device* d, void* o, const void* i, ma_uint32 n) {
     
     float* buf = voices[v].buffer;
     int len = voices[v].n;
-    double idx = voices[v].idx;
     double phase_inc = voices[v].phase_inc;
-    float gain = voices[v].gain;
     float atten = voices[v].atten;
     int stereo = voices[v].stereo;
     
@@ -185,8 +183,9 @@ void cb(ma_device* d, void* o, const void* i, ma_uint32 n) {
     }
     
     for (ma_uint32 j = 0; j < n; j++) {
-      int i0 = (int)idx;
-      if (i0 >= len || gain <= 0.0001f) {
+      if (!voices[v].active) break;
+      int i0 = (int)voices[v].idx;
+      if (i0 >= len || voices[v].gain <= 0.0001f) {
         voices[v].active = 0;
         break;
       }
@@ -197,26 +196,23 @@ void cb(ma_device* d, void* o, const void* i, ma_uint32 n) {
           if (i0_s + 1 >= len) {
               voices[v].active = 0; break;
           }
-          out[j * 2] += buf[i0_s] * gain;
-          out[j * 2 + 1] += buf[i0_s + 1] * gain;
-          idx += phase_inc * 2.0;
+          out[j * 2] += buf[i0_s] * voices[v].gain;
+          out[j * 2 + 1] += buf[i0_s + 1] * voices[v].gain;
+          voices[v].idx += phase_inc * 2.0;
       } else {
           // Linear interpolation for mono
           int i1 = i0 + 1;
           if (i1 >= len) i1 = i0;
-          float frac = (float)(idx - i0);
+          float frac = (float)(voices[v].idx - i0);
           float sample = buf[i0] + (buf[i1] - buf[i0]) * frac;
           
-          out[j * 2] += sample * gain;
-          out[j * 2 + 1] += sample * gain;
-          idx += phase_inc;
+          out[j * 2] += sample * voices[v].gain;
+          out[j * 2 + 1] += sample * voices[v].gain;
+          voices[v].idx += phase_inc;
       }
       
-      gain *= atten;
+      voices[v].gain *= atten;
     }
-    
-    voices[v].idx = idx;
-    voices[v].gain = gain;
   }
   
   float master_linear = powf(10.0f, master_vol_db / 20.0f);
