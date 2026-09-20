@@ -629,6 +629,10 @@ int main(int argc, char** argv) {
     
     if (udp_port >= 0) config.udp_port = udp_port;
     if (events_port >= 0) config.events_port = events_port;
+    if (max_voices == -1) {
+        if (config.max_voices > 0) max_voices = config.max_voices;
+        else max_voices = 8;
+    }
     hazel_set_config(app, &config);
 
     char status_str[256];
