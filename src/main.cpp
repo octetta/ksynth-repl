@@ -98,7 +98,7 @@ int my_dir_cb(hazel_app_t* app, const char* dirpath, void* user_data) {
 #include "udp.h"
 
 
-#define MAX_VOICES 8
+int max_voices = 8;
 
 typedef struct {
   float* buffer;
@@ -111,7 +111,7 @@ typedef struct {
   int active;
 } Voice;
 
-volatile Voice voices[MAX_VOICES] = {0};
+volatile Voice* voices = nullptr;
 
 void* global_hazel_ctx = NULL;
 int midi_listen_channel = -1; // -1 = OMNI, 0-15 = Ch 1-16
@@ -124,7 +124,7 @@ void trigger_midi_note(int channel, int note, int velocity) {
     
     // Find free voice
     int v = -1;
-    for (int i=0; i<MAX_VOICES; i++) {
+    for (int i=0; i<max_voices; i++) {
         if (!voices[i].active) { v = i; break; }
     }
     if (v == -1) return; // Voice stealing omitted for now
@@ -157,7 +157,7 @@ void cb(ma_device* d, void* o, const void* i, ma_uint32 n) {
     out[j] = 0.0f;
   }
   
-  for (int v = 0; v < MAX_VOICES; v++) {
+  for (int v = 0; v < max_voices; v++) {
     if (!voices[v].active) continue;
     
     float* buf = voices[v].buffer;
@@ -243,7 +243,7 @@ int audio_start(void) {
 }
 
 int audio_end(void) {
-  for (int i = 0; i < MAX_VOICES; i++) {
+  for (int i = 0; i < max_voices; i++) {
     if (voices[i].buffer) {
       free(voices[i].buffer);
       voices[i].buffer = NULL;
@@ -330,7 +330,7 @@ void my_eval_engine(const char* input, hazel_ctx_t* ctx, void* user_data) {
                         if (parsed < 7) vel_sens = banks[slot].base_vel_sens;
                         
                         int vslot = -1;
-                        for (int i = 0; i < MAX_VOICES; i++) {
+                        for (int i = 0; i < max_voices; i++) {
                             if (!voices[i].active) { vslot = i; break; }
                         }
                         if (vslot != -1) {
@@ -410,7 +410,7 @@ void my_eval_engine(const char* input, hazel_ctx_t* ctx, void* user_data) {
                     float* buf = ks_ctx_get_var_buf(ks_handle);
                     if (r > 0 && buf) {
                         int slot = -1;
-                        for (int i = 0; i < MAX_VOICES; i++) {
+                        for (int i = 0; i < max_voices; i++) {
                             if (!voices[i].active) {
                                 slot = i;
                                 break;
@@ -582,6 +582,7 @@ int main(int argc, char** argv) {
         if (argv[i][0] == '-') {
             if (argv[i][1] == 'e') events_port = atoi(&argv[i][2]);
             else if (argv[i][1] == 'p') udp_port = atoi(&argv[i][2]);
+            else if (argv[i][1] == 'v') max_voices = atoi(&argv[i][2]);
         } else {
             file_to_load = argv[i];
         }
@@ -653,6 +654,7 @@ int main(int argc, char** argv) {
         }
     }
     
+    voices = (volatile Voice*)calloc(max_voices, sizeof(Voice));
     audio_start();
     hazel_run(app);
     audio_end();
