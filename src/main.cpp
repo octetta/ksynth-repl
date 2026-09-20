@@ -516,6 +516,13 @@ void my_eval_engine(const char* input, hazel_ctx_t* ctx, void* user_data) {
                 } else {
                     hazel_append_output(ctx, "Usage: \\mv [dB]\n", 1);
                 }
+
+
+
+            } else if (p[1] == 's' && p[2] == 'g') {
+                hazel_append_output(ctx, "TODO: Wire up native ksynth-scope IPC!\n", 0);
+            } else if (p[1] == 's' && p[2] == 's') {
+                hazel_append_output(ctx, "TODO: Wire up native ksynth-scope IPC!\n", 0);
             } else if (p[1] == 'v' && p[2] == 'c') {
                 char v_name[256];
                 if (get_var(p + 3, v_name)) {
