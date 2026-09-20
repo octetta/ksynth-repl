@@ -23,8 +23,8 @@ static mm_context midi_ctx;
 static mm_device midi_in_hw;
 static mm_device midi_in_virt;
 
-void midi_init() {
-    mm_context_init(&midi_ctx, "ksynth-repl");
+void midi_init(const char* port_name) {
+    mm_context_init(&midi_ctx, port_name ? port_name : "ksynth-repl");
     if (mm_in_count(&midi_ctx) > 0) {
         if (mm_in_open(&midi_ctx, &midi_in_hw, 0, my_midi_callback, NULL) == 0) {
             mm_in_start(&midi_in_hw);

@@ -127,7 +127,17 @@ void trigger_midi_note(int channel, int note, int velocity) {
     for (int i=0; i<max_voices; i++) {
         if (!voices[i].active) { v = i; break; }
     }
-    if (v == -1) return; // Voice stealing omitted for now
+    if (v == -1) {
+        // Steal the oldest voice (largest idx)
+        double max_idx = -1.0;
+        for (int i=0; i<max_voices; i++) {
+            if (voices[i].idx > max_idx) {
+                max_idx = voices[i].idx;
+                v = i;
+            }
+        }
+        voices[v].active = 0; // temporarily disable
+    }
     
     if (voices[v].buffer) free(voices[v].buffer);
     voices[v].buffer = (float*)malloc(banks[note].length * sizeof(float));
@@ -608,6 +618,7 @@ int main(int argc, char** argv) {
     int events_port = -1;
     bool enable_scope = false;
     const char* file_to_load = nullptr;
+    const char* midi_name = "ksynth-repl";
 
     for (int i=1; i<argc; i++) {
         if (strcmp(argv[i], "--scope") == 0 || strcmp(argv[i], "-s") == 0) {
@@ -618,6 +629,7 @@ int main(int argc, char** argv) {
             if (argv[i][1] == 'e') events_port = atoi(&argv[i][2]);
             else if (argv[i][1] == 'p') udp_port = atoi(&argv[i][2]);
             else if (argv[i][1] == 'v') max_voices = atoi(&argv[i][2]);
+            else if (argv[i][1] == 'm' && i + 1 < argc) midi_name = argv[++i];
         } else {
             file_to_load = argv[i];
         }
@@ -676,7 +688,7 @@ int main(int argc, char** argv) {
     
     hazel_set_status(app, status_str);
 
-    midi_init();
+    midi_init(midi_name);
     udp_server_start(config.udp_port, config.events_port);
 
 
