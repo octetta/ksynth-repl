@@ -36,8 +36,14 @@ typedef enum {
 
 typedef struct ks_val { int r, n; double f[]; } *K;
 
+typedef struct ks_dict_entry {
+    char *name;
+    K val;
+    struct ks_dict_entry *next;
+} ks_dict_entry;
+
 typedef struct ks_ctx {
-    K vars[26];          /* A-Z user variables (persistent, malloc'd) */
+    ks_dict_entry *dict; /* String-based variables and verbs */
     K args[2];           /* x, y function arguments (arena) */
 
     /* Eval-scoped bump allocator for temporary K objects */
@@ -93,6 +99,7 @@ void ks_ctx_destroy(uintptr_t handle);
 int ks_ctx_run(uintptr_t handle, const char *script);
 int ks_ctx_repl(uintptr_t handle, const char *expr);
 const char *ks_ctx_repl_str(uintptr_t handle);
+int ks_ctx_get_var_str(uintptr_t handle, const char *vname);
 int ks_ctx_get_var(uintptr_t handle, int letter_upper);
 float *ks_ctx_get_var_buf(uintptr_t handle);
 int ks_ctx_repl_length(uintptr_t handle);
@@ -114,9 +121,23 @@ float *ks_get_buffer(void);
 int ks_get_length(void);
 const char *ks_get_error(void);
 
+
+
+/* Extended Types and API */
+K k_get_var_str(ks_ctx *ctx, const char *name);
+void k_set_var_str(ks_ctx *ctx, const char *name, K x);
+ks_status ks_bind_vector_str(ks_ctx *ctx, const char *name, const double *values, size_t length);
+
+K k_from_f64(ks_ctx *ctx, int n, const double *ptr);
+K k_from_f32(ks_ctx *ctx, int n, const float *ptr);
+K k_from_i32(ks_ctx *ctx, int n, const int *ptr);
+int k_copy_to_f64(K x, double *out, int max_n);
+int k_copy_to_f32(K x, float *out, int max_n);
+int k_copy_to_i32(K x, int *out, int max_n);
+void bind_array_f64(ks_ctx *ctx, char name, int n, const double *ptr);
+void bind_array_f32(ks_ctx *ctx, char name, int n, const float *ptr);
+void bind_array_i32(ks_ctx *ctx, char name, int n, const int *ptr);
+
 #endif
 
-/*
-Copyright (c) 2026 octetta / Joseph Stewart
-MIT LICENSE AT https://github.com/octetta/k-synth
-*/
+int ks_ctx_set_var_str_f32(uintptr_t handle, const char *vname, const float *buf, int len);

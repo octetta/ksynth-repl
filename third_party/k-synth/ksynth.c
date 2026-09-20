@@ -47,36 +47,110 @@ static inline double safe_val(double v) {
 
 /* --- Context Lifecycle --- */
 
+
+static void bind_alias(ks_ctx *ctx, const char *name, const char *code) {
+    char *dup = strdup(code);
+    K f = k_func(ctx, dup);
+    free(dup);
+    if (!f) return;
+    int len = strlen((char*)f->f) + 1;
+    int ndoubles = (len + sizeof(double) - 1) / sizeof(double);
+    K perm = k_new_perm(ctx, ndoubles);
+    if (perm) {
+        perm->n = -1;
+        memcpy(perm->f, f->f, len);
+        k_set_var_str(ctx, name, perm);
+    }
+}
+
+static void ks_init_aliases(ks_ctx *ctx) {
+    bind_alias(ctx, "sin", "s x");
+    bind_alias(ctx, "cos", "c x");
+    bind_alias(ctx, "tan", "t x");
+    bind_alias(ctx, "tanh", "h x");
+    bind_alias(ctx, "abs", "a x");
+    bind_alias(ctx, "sqrt", "q x");
+    bind_alias(ctx, "log", "l x");
+    bind_alias(ctx, "exp", "e x");
+    bind_alias(ctx, "floor", "_ x");
+    bind_alias(ctx, "rand", "r x");
+    bind_alias(ctx, "pi", "p x");
+    bind_alias(ctx, "rev", "i x");
+    bind_alias(ctx, "idx", "! x");
+    bind_alias(ctx, "phase", "~ x");
+    bind_alias(ctx, "sum", "+ x");
+    bind_alias(ctx, "peak", "> x");
+    bind_alias(ctx, "norm", "w x");
+    bind_alias(ctx, "left", "j x");
+    bind_alias(ctx, "right", "k x");
+    bind_alias(ctx, "quantize", "v x");
+    bind_alias(ctx, "saw", "o x");
+    bind_alias(ctx, "slice", "x S y");
+    bind_alias(ctx, "speed", "x Z y");
+    bind_alias(ctx, "delay", "x D y");
+}
+
 ks_ctx* ks_create(size_t mem_limit, long long gas_limit, double sample_rate) {
     ks_ctx *ctx = calloc(1, sizeof(ks_ctx));
     if (!ctx) return NULL;
-
-    /* Default arena size if caller passes 0.
-       Sizing rationale: a 2-second stereo output at 44100 is 88200 frames
-       × 2 channels × 8 bytes = ~1.4 MB just for the output buffer, before
-       any intermediate vectors. 8 MB gives comfortable headroom for typical
-       multi-stage patches without being wasteful. */
-    if (mem_limit == 0) mem_limit = 8 * 1024 * 1024;
-
+    
     ctx->arena_base = malloc(mem_limit);
-    if (!ctx->arena_base) { free(ctx); return NULL; }
-    ctx->arena_ptr  = ctx->arena_base;
-    ctx->arena_end  = ctx->arena_base + mem_limit;
-    ctx->mem_limit  = mem_limit;
+    if (!ctx->arena_base) {
+        free(ctx);
+        return NULL;
+    }
+    
+    ctx->arena_ptr = ctx->arena_base;
+    ctx->arena_end = ctx->arena_base + mem_limit;
+    ctx->mem_limit = mem_limit;
+    ctx->gas_limit = gas_limit;
     ctx->sample_rate = sample_rate;
-
-    ctx->gas_limit  = gas_limit;
+    ctx->dict = NULL;
+    ks_init_aliases(ctx);
+    
     return ctx;
+}
+
+K k_get_var_str(ks_ctx *ctx, const char *name) {
+    ks_dict_entry *curr = ctx->dict;
+    while (curr) {
+        if (strcmp(curr->name, name) == 0) return curr->val;
+        curr = curr->next;
+    }
+    return NULL;
+}
+
+void k_set_var_str(ks_ctx *ctx, const char *name, K x) {
+    ks_dict_entry *curr = ctx->dict;
+    while (curr) {
+        if (strcmp(curr->name, name) == 0) {
+            if (curr->val) k_free(ctx, curr->val);
+            curr->val = x;
+            return;
+        }
+        curr = curr->next;
+    }
+    ks_dict_entry *entry = malloc(sizeof(ks_dict_entry));
+    entry->name = strdup(name);
+    entry->val = x;
+    entry->next = ctx->dict;
+    ctx->dict = entry;
 }
 
 void ks_clear_vars(ks_ctx *ctx) {
     if (!ctx) return;
-    for (int i = 0; i < 26; i++) {
-        if (ctx->vars[i]) { k_free(ctx, ctx->vars[i]); ctx->vars[i] = NULL; }
+    ks_dict_entry *curr = ctx->dict;
+    while (curr) {
+        ks_dict_entry *next = curr->next;
+        if (curr->val) k_free(ctx, curr->val);
+        free(curr->name);
+        free(curr);
+        curr = next;
     }
-    /* args[] are arena-allocated; just null them out — the arena
-       reset in ks_eval handles their memory. */
-    ctx->args[0] = ctx->args[1] = NULL;
+    ctx->dict = NULL;
+    ks_init_aliases(ctx);
+    ctx->args[0] = NULL;
+    ctx->args[1] = NULL;
 }
 
 void ks_destroy(ks_ctx *ctx) {
@@ -169,8 +243,9 @@ ks_status ks_bind_vector(ks_ctx *ctx, char name, const double *values,
     if (length) memcpy(x->f, values, length * sizeof(double));
 
     int i = name - 'A';
-    K old = ctx->vars[i];
-    ctx->vars[i] = x;
+    char vn[2] = {(char)(i+'A'), 0};
+    K old = k_get_var_str(ctx, vn);
+    k_set_var_str(ctx, vn, x);
     k_free(ctx, old);
     ctx->last_status = KS_OK;
     return KS_OK;
@@ -180,8 +255,10 @@ ks_status ks_bind_vector(ks_ctx *ctx, char name, const double *values,
    The perm object in vars[] is left untouched; the copy lives for
    the duration of the current eval. */
 K k_get(ks_ctx *ctx, char name) {
-    if (name < 'A' || name > 'Z' || !ctx->vars[name - 'A']) return NULL;
-    K v = ctx->vars[name - 'A'];
+    char vn[2] = {name, 0};
+    K v = k_get_var_str(ctx, vn);
+    if (!v) return NULL;
+    /* already got v */
     if (k_is_func(v)) {
         /* Functions: arena-copy the func object so the body pointer
            still points into the perm allocation's flex array. */
@@ -207,6 +284,19 @@ K k_func(ks_ctx *ctx, char *body) {
     memcpy(x->f, body, len);
     return x;
 }
+
+typedef enum { TOK_EOF, TOK_SYM, TOK_ID, TOK_NUM, TOK_FUNC } TokenType;
+typedef struct {
+    TokenType type;
+    char c_val;
+    char str_val[32];
+    K k_val;
+} Token;
+
+K e_tok(ks_ctx *ctx, Token **t);
+K expr_tok(ks_ctx *ctx, Token **t);
+K atom_tok(ks_ctx *ctx, Token **t);
+int ks_lex(ks_ctx *ctx, const char *code, Token *tokens, int max_tokens);
 
 int k_is_func(K x) {
     return x && x->n == -1;
@@ -247,8 +337,10 @@ K k_call(ks_ctx *ctx, K fn, K *call_args, int nargs) {
     if (nargs > 0 && call_args[0]) ctx->args[0] = call_args[0];
     if (nargs > 1 && call_args[1]) ctx->args[1] = call_args[1];
 
-    char *s = body;
-    K result = e(ctx, &s);
+    Token tokens[4096];
+    ks_lex(ctx, body, tokens, 4096);
+    Token *t = tokens;
+    K result = e_tok(ctx, &t);
 
     ctx->args[0] = old_x;
     ctx->args[1] = old_y;
@@ -333,7 +425,8 @@ K mo(ks_ctx *ctx, char c, K b) {
     if (!b) return NULL;
 
     if (c >= 'A' && c <= 'Z') {
-        K var = ctx->vars[c - 'A'];
+        char vn[2] = {c, 0};
+        K var = k_get_var_str(ctx, vn);
         if (k_is_func(var)) {
             K call_args[1] = {b};
             return k_call(ctx, var, call_args, 1);
@@ -470,7 +563,8 @@ K dy(ks_ctx *ctx, char c, K a, K b) {
     if (!a || !b) { k_free(ctx, a); k_free(ctx, b); return NULL; }
 
     if (c >= 'A' && c <= 'Z') {
-        K var = ctx->vars[c - 'A'];
+        char vn[2] = {c, 0};
+        K var = k_get_var_str(ctx, vn);
         if (k_is_func(var)) {
             K call_args[2] = {a, b};
             return k_call(ctx, var, call_args, 2);
@@ -521,7 +615,7 @@ K dy(ks_ctx *ctx, char c, K a, K b) {
         if (b->n >= 2) {
             n_out = (int)b->f[1];
         } else {
-            K nv = ctx->vars['N' - 'A'];
+            K nv = k_get_var_str(ctx, "N");
             n_out = (nv && nv->n > 0) ? (int)nv->f[0] : 0;
         }
         int tbl_len = a->n;
@@ -640,6 +734,50 @@ K dy(ks_ctx *ctx, char c, K a, K b) {
         k_free(ctx, a); k_free(ctx, b); return x;
     }
 
+    if (c == 'D') {
+        int dd   = (int)a->f[0];
+        double g = (a->n > 1) ? a->f[1] : 0.4;
+        GAS_CHECK(ctx, b->n);
+        x = k_new(ctx, b->n);
+        for (int i = 0; i < b->n; i++) {
+            double delayed = (i >= dd) ? x->f[i-dd] : 0;
+            x->f[i] = safe_val(b->f[i] + (g * delayed));
+        }
+        k_free(ctx, a); k_free(ctx, b); return x;
+    }
+
+    if (c == 'S') {
+        int start = 0;
+        int len = 0;
+        if (b->n >= 1) start = (int)b->f[0];
+        if (b->n >= 2) len = (int)b->f[1];
+        if (len <= 0) { k_free(ctx, a); k_free(ctx, b); return k_new(ctx, 0); }
+        GAS_CHECK(ctx, len);
+        x = k_new(ctx, len);
+        for (int i = 0; i < len; i++) {
+            int idx = start + i;
+            x->f[i] = (idx >= 0 && idx < a->n) ? a->f[idx] : 0.0;
+        }
+        k_free(ctx, a); k_free(ctx, b); return x;
+    }
+
+    if (c == 'Z') {
+        double speed = (b->n > 0) ? b->f[0] : 1.0;
+        if (speed <= 0.0) speed = 1.0;
+        int len = (int)((double)a->n / speed);
+        GAS_CHECK(ctx, len);
+        x = k_new(ctx, len);
+        for(int i=0; i<len; i++) {
+            double pos = i * speed;
+            int idx = (int)pos;
+            double frac = pos - idx;
+            double v1 = (idx >= 0 && idx < a->n) ? a->f[idx] : 0.0;
+            double v2 = (idx+1 >= 0 && idx+1 < a->n) ? a->f[idx+1] : 0.0;
+            x->f[i] = v1 * (1.0 - frac) + v2 * frac;
+        }
+        k_free(ctx, a); k_free(ctx, b); return x;
+    }
+
     if (c == ',') {
         int n = a->n + b->n;
         GAS_CHECK(ctx, n);
@@ -675,106 +813,162 @@ K dy(ks_ctx *ctx, char c, K a, K b) {
 }
 
 /* --- Parser & Evaluator ---
- * * Evaluates right-to-left.
- * The parser advances a char pointer (`char **s`) in place.
- * * Call Graph:
- * e()    -> parses statement sequences separated by ';'
- * expr() -> handles dyadic operators (A + B) and function calls (F arg)
- * atom() -> parses literals, variables (A-Z), monads, and (...) groups
+ * The parser uses tokens.
  */
 
-K atom(ks_ctx *ctx, char **s);
-K expr(ks_ctx *ctx, char **s);
+K e_tok(ks_ctx *ctx, Token **t);
+K expr_tok(ks_ctx *ctx, Token **t);
 
-K expr(ks_ctx *ctx, char **s) {
-    K x = atom(ctx, s);
-    while (**s == ' ') (*s)++;
-
-    if (k_is_func(x) && **s && **s != '\n' && **s != ')' && **s != ';' && **s != '}' && **s != '/') {
-        char peek = **s;
-        int is_operator = strchr("+-*%^&|<>=,#osfzt haqle rpciw dvmbu jkn g", peek) != NULL;
-        if (!is_operator) {
-            K arg = expr(ctx, s);
-            K call_args[1] = {arg};
-            K result = k_call(ctx, x, call_args, 1);
-            k_free(ctx, x);
-            return result;
+int ks_lex(ks_ctx *ctx, const char *code, Token *tokens, int max_tokens) {
+    int count = 0;
+    const char *p = code;
+    while (*p && count < max_tokens - 1) {
+        while (*p == ' ') p++;
+        if (*p == '/') {
+            while (*p && *p != '\n') p++;
+            if (*p == '\n') p++;
+            continue;
         }
-    }
+        if (!*p) break;
 
-    if (!**s || **s == '\n' || **s == ')' || **s == ';' || **s == '}' || **s == '/') return x;
-    char op = *(*s)++;
-    return dy(ctx, op, x, expr(ctx, s));
+        if (*p == '(' || *p == ')' || *p == ';' || *p == ':' || *p == '{' || *p == '}' || *p == '\\') {
+            tokens[count].type = TOK_SYM;
+            tokens[count].c_val = *p;
+            count++;
+            if (*p == '{') {
+                p++;
+                const char *start = p;
+                int depth = 1;
+                while (*p && depth > 0) {
+                    if (*p == '{') depth++;
+                    else if (*p == '}') depth--;
+                    p++;
+                }
+                if (depth == 0) {
+                    int len = (p - 1) - start;
+                    char *body = malloc(len + 1);
+                    memcpy(body, start, len);
+                    body[len] = '\0';
+                    tokens[count-1].type = TOK_FUNC;
+                    tokens[count-1].k_val = k_func(ctx, body);
+                    free(body);
+                    continue; // Skip the standard p++ below
+                }
+            } else {
+                p++;
+                continue;
+            }
+        }
+
+        if ((*p >= '0' && *p <= '9') || (*p == '.' && p[1] >= '0' && p[1] <= '9')) {
+            double buf[1024]; int n = 0;
+            char *ptr = (char*)p;
+            while (n < 1024) {
+                buf[n++] = strtod(ptr, &ptr);
+                char *after = ptr;
+                char *peek = ptr;
+                while (*peek == ' ') peek++;
+                int had_space = (peek != after);
+                if (*peek >= '0' && *peek <= '9') { ptr = peek; continue; }
+                if (*peek == '-' && (peek[1] >= '0' && peek[1] <= '9') && had_space) { ptr = peek; continue; }
+                if (had_space && ((*peek >= 'A' && *peek <= 'Z') || (*peek >= 'a' && *peek <= 'z'))) {
+                    // Peek ahead to see if it's a valid registered variable
+                    // Wait! The legacy parser specifically checks if it's a single-letter variable not followed by ':'
+                    // Here, we can just use the standard lexing loop to handle array construction in atom().
+                    // It's cleaner to let `atom()` build the array by consuming TOK_NUM and TOK_ID tokens.
+                    // But legacy ksynth builds the array natively inside the number parser!
+                    // Let's preserve the exact legacy array logic here for numbers:
+                    if (peek[1] != ':') {
+                        // In old parser, it only looks at 'A'-'Z' here. Let's do the same for legacy compatibility.
+                        if (*peek >= 'A' && *peek <= 'Z') {
+                            char vn[2] = {*peek, 0};
+                            K v = k_get_var_str(ctx, vn);
+                            if (v && v->n == 1) { buf[n++] = v->f[0]; ptr = peek + 1; continue; }
+                        }
+                    }
+                }
+                break;
+            }
+            p = ptr;
+            K x = k_new(ctx, n); memcpy(x->f, buf, n * sizeof(double));
+            tokens[count].type = TOK_NUM;
+            tokens[count].k_val = x;
+            count++;
+            continue;
+        }
+
+        // Greedy Fallback Lexing for Identifiers/Verbs
+        if ((*p >= 'A' && *p <= 'Z') || (*p >= 'a' && *p <= 'z') || *p == '_' || strchr("+-*%^&|<>=,#", *p)) {
+            char buf[32]; int wl = 0;
+            const char *ptr = p;
+            
+            // If it's a math operator, it's just 1 char.
+            if (strchr("+-*%^&|<>=,#", *ptr)) {
+                buf[wl++] = *ptr++;
+            } else {
+                while ((*ptr >= 'A' && *ptr <= 'Z') || (*ptr >= 'a' && *ptr <= 'z') || (*ptr >= '0' && *ptr <= '9') || *ptr == '_') {
+                    if (wl < 31) buf[wl++] = *ptr;
+                    ptr++;
+                }
+            }
+            buf[wl] = 0;
+
+            if (wl > 1) {
+                // Check if the whole word is a registered variable
+                if (k_get_var_str(ctx, buf)) {
+                    tokens[count].type = TOK_ID;
+                    strcpy(tokens[count].str_val, buf);
+                    count++;
+                    p = ptr;
+                    continue;
+                }
+                // (Future: check multi-letter verbs here. For now, fall through).
+            }
+
+            // Fallback: emit only the first character!
+            tokens[count].type = TOK_ID;
+            tokens[count].str_val[0] = *p;
+            tokens[count].str_val[1] = '\0';
+            count++;
+            p++;
+            continue;
+        }
+
+        // Catch-all
+        tokens[count].type = TOK_ID;
+        tokens[count].str_val[0] = *p;
+        tokens[count].str_val[1] = '\0';
+        count++;
+        p++;
+    }
+    tokens[count].type = TOK_EOF;
+    return count;
 }
 
-K atom(ks_ctx *ctx, char **s) {
-    while (**s == ' ') (*s)++;
-    if (**s == '/') {
-        while (**s && **s != '\n') (*s)++;
-        if (**s == '\n') (*s)++;
-        return atom(ctx, s);
-    }
-    if (!**s || **s == '\n' || **s == ')' || **s == ';') return NULL;
+K atom_tok(ks_ctx *ctx, Token **t) {
+    Token *tk = *t;
+    if (tk->type == TOK_EOF || (tk->type == TOK_SYM && (tk->c_val == ')' || tk->c_val == ';'))) return NULL;
 
-    if (**s == '(') {
-        (*s)++; K x = e(ctx, s);
-        if (**s == ')') (*s)++;
+    if (tk->type == TOK_SYM && tk->c_val == '(') {
+        (*t)++; K x = e_tok(ctx, t);
+        if ((*t)->type == TOK_SYM && (*t)->c_val == ')') (*t)++;
         return x;
     }
 
-    if (**s == '{') {
-        (*s)++;
-        char *start = *s;
-        int depth = 1;
-        while (**s && depth > 0) {
-            if (**s == '{') depth++;
-            else if (**s == '}') depth--;
-            (*s)++;
-        }
-        if (depth == 0) {
-            int len = (*s - 1) - start;
-            char *body = malloc(len + 1);
-            memcpy(body, start, len);
-            body[len] = '\0';
-            K func = k_func(ctx, body);
-            free(body);
-            return func;
-        }
-        return NULL;
+    if (tk->type == TOK_FUNC || tk->type == TOK_NUM) {
+        K x = tk->k_val;
+        (*t)++;
+        return x; // (Arena lifetime, so it's safe to return)
     }
 
-    char c = **s;
-
-    if ((c >= '0' && c <= '9') || (c == '.' && (*s)[1] >= '0') ||
-        (c == '-' && ((*s)[1] >= '0' || (*s)[1] == '.'))) {
-        double buf[1024]; int n = 0;
-        char *ptr = *s;
-        while (n < 1024) {
-            buf[n++] = strtod(ptr, &ptr);
-            char *after = ptr;
-            char *peek  = ptr;
-            while (*peek == ' ') peek++;
-            int had_space = (peek != after);
-            if (*peek >= '0' && *peek <= '9') { ptr = peek; continue; }
-            if (*peek == '-' && peek[1] >= '0' && had_space) { ptr = peek; continue; }
-            if (had_space && *peek >= 'A' && *peek <= 'Z' && peek[1] != ':') {
-                K v = ctx->vars[*peek - 'A'];
-                if (v && v->n == 1) { buf[n++] = v->f[0]; ptr = peek + 1; continue; }
-            }
-            break;
-        }
-        *s = ptr;
-        K x = k_new(ctx, n); memcpy(x->f, buf, n * sizeof(double));
-        return x;
-    }
-
-    (*s)++;
-
-    if (**s == ':') {
-        (*s)++; K x = expr(ctx, s);
-        if (c >= 'A' && c <= 'Z' && x) {
-            int i = c - 'A';
-            /* Copy x (arena) into a persistent malloc'd object for vars[]. */
+    // It's a TOK_ID
+    char *word = tk->str_val;
+    (*t)++;
+    
+    // Is it an assignment? A:2
+    if ((*t)->type == TOK_SYM && (*t)->c_val == ':') {
+        (*t)++; K x = expr_tok(ctx, t);
+        if (x) {
             K perm;
             if (k_is_func(x)) {
                 int len = strlen((char*)x->f) + 1;
@@ -788,60 +982,196 @@ K atom(ks_ctx *ctx, char **s) {
                 if (!perm) longjmp(ctx->recover, 1);
                 memcpy(perm->f, x->f, x->n * sizeof(double));
             }
-            if (ctx->vars[i]) k_free(ctx, ctx->vars[i]);
-            ctx->vars[i] = perm;
+            k_set_var_str(ctx, word, perm);
         }
-        /* Return x as-is (arena lifetime, caller frees via k_free no-op). */
         return x;
     }
-
-    if (c >= 'A' && c <= 'Z') {
-        K first = k_get(ctx, c);
-        if (!first || first->n != 1) return first;
+    
+    // Is it a variable lookup?
+    K first = k_get_var_str(ctx, word);
+    if (first) {
+        // Build array if followed by other single-value variables
+        if (first->n != 1) {
+            if (k_is_func(first)) {
+                int len = strlen((char*)first->f) + 1;
+                int ndoubles = (len + sizeof(double) - 1) / sizeof(double);
+                K clone = k_new(ctx, ndoubles);
+                clone->n = -1;
+                memcpy(clone->f, first->f, len);
+                return clone;
+            } else {
+                K clone = k_new(ctx, first->n);
+                memcpy(clone->f, first->f, first->n * sizeof(double));
+                return clone;
+            }
+        }
         double buf[1024]; int n = 0;
         buf[n++] = first->f[0];
-        k_free(ctx, first);
-        char *ptr = *s;
-        while (n < 1024) {
-            char *peek = ptr;
-            while (*peek == ' ') peek++;
-            if (peek == ptr) break;
-            if (*peek < 'A' || *peek > 'Z') break;
-            if (peek[1] == ':') break;
-            K v = ctx->vars[*peek - 'A'];
+        
+        // Peek ahead for A B C style array construction
+        while ((*t)->type == TOK_ID) {
+            if (((*t) + 1)->type == TOK_SYM && ((*t) + 1)->c_val == ':') break;
+            K v = k_get_var_str(ctx, (*t)->str_val);
             if (!v || v->n != 1) break;
             buf[n++] = v->f[0];
-            ptr = peek + 1;
+            (*t)++;
         }
-        *s = ptr;
+        
         K x = k_new(ctx, n);
         memcpy(x->f, buf, n * sizeof(double));
         return x;
     }
-
-    if (c == 'x') return ctx->args[0] ? ctx->args[0] : k_new(ctx, 0);
-    if (c == 'y') return ctx->args[1] ? ctx->args[1] : k_new(ctx, 0);
+    
+    // Implicit args
+    if (strcmp(word, "x") == 0) return ctx->args[0] ? ctx->args[0] : k_new(ctx, 0);
+    if (strcmp(word, "y") == 0) return ctx->args[1] ? ctx->args[1] : k_new(ctx, 0);
+    
+    // Monadic/Adverb evaluation
+    // Unary minus
+    if (strcmp(word, "-") == 0) {
+        K arg = expr_tok(ctx, t);
+        if (!arg) return NULL;
+        K x = k_new(ctx, arg->n);
+        for(int i=0; i<arg->n; i++) x->f[i] = -arg->f[i];
+        k_free(ctx, arg);
+        return x;
+    }
 
     int is_scan = 0;
-    while (**s == ' ') (*s)++;
-    if (**s == '\\') { is_scan = 1; (*s)++; }
-    K arg = expr(ctx, s);
-    if (is_scan) return scan(ctx, c, arg);
-    else return mo(ctx, c, arg);
+    if ((*t)->type == TOK_SYM && (*t)->c_val == '\\') {
+        is_scan = 1;
+        (*t)++;
+    }
+    K arg = expr_tok(ctx, t);
+    if (is_scan) return scan(ctx, word[0], arg); // Assuming length 1 for legacy
+    else return mo(ctx, word[0], arg);
 }
 
-K e(ks_ctx *ctx, char **s) {
-    K x = expr(ctx, s);
-    while (**s == ' ') (*s)++;
-    while (**s == ';') {
-        (*s)++;
-        if (x) k_free(ctx, x);
-        while (**s == ' ') (*s)++;
-        if (!**s || **s == '\n' || **s == ')' || **s == '}') return k_new(ctx, 0);
-        x = expr(ctx, s);
-        while (**s == ' ') (*s)++;
+K expr_tok(ks_ctx *ctx, Token **t) {
+    K x = atom_tok(ctx, t);
+    
+    // Function calls
+    if (k_is_func(x) && (*t)->type != TOK_EOF && !((*t)->type == TOK_SYM && ((*t)->c_val == ')' || (*t)->c_val == ';' || (*t)->c_val == '}'))) {
+        // Is the next token an operator?
+        int is_operator = 0;
+        if ((*t)->type == TOK_ID && strlen((*t)->str_val) == 1) {
+            if (strchr("+-*%^&|<>=,#osfzt haqle rpciw dvmbu jkn gSZD", (*t)->str_val[0])) {
+                is_operator = 1;
+            }
+        }
+        if (!is_operator) {
+            K arg = expr_tok(ctx, t);
+            K call_args[1] = {arg};
+            K result = k_call(ctx, x, call_args, 1);
+            // k_free(ctx, x); // Wait, x is arena allocated or from dictionary. We don't free dictionary variables.
+            // In legacy, x from atom() was arena allocated (e.g. from {}). But what if it's from dictionary?
+            // Actually legacy ksynth didn't free dictionary functions here. Wait, k_call doesn't care.
+            return result;
+        }
+    }
+    
+    if ((*t)->type == TOK_EOF || ((*t)->type == TOK_SYM && ((*t)->c_val == ')' || (*t)->c_val == ';' || (*t)->c_val == '}'))) return x;
+    
+    // Dyadic operator
+    if ((*t)->type == TOK_ID) {
+        char op = (*t)->str_val[0];
+        (*t)++;
+        return dy(ctx, op, x, expr_tok(ctx, t));
+    }
+    
+    return x;
+}
+
+K e_tok(ks_ctx *ctx, Token **t) {
+    K x = expr_tok(ctx, t);
+    while ((*t)->type == TOK_SYM && (*t)->c_val == ';') {
+        (*t)++;
+        if (x && !k_is_func(x)) { } // no-op for arena
+        if ((*t)->type == TOK_EOF || ((*t)->type == TOK_SYM && ((*t)->c_val == ')' || (*t)->c_val == '}'))) return k_new(ctx, 0);
+        x = expr_tok(ctx, t);
     }
     return x;
+}
+
+
+
+/* --- Missing Helpers --- */
+
+
+K k_from_f64(ks_ctx *ctx, int n, const double *ptr) {
+    K x = k_new(ctx, n);
+    if (x && ptr) {
+        GAS_CHECK(ctx, n);
+        memcpy(x->f, ptr, n * sizeof(double));
+    }
+    return x;
+}
+
+K k_from_f32(ks_ctx *ctx, int n, const float *ptr) {
+    K x = k_new(ctx, n);
+    if (x && ptr) {
+        GAS_CHECK(ctx, n);
+        for (int i = 0; i < n; i++) x->f[i] = (double)ptr[i];
+    }
+    return x;
+}
+
+K k_from_i32(ks_ctx *ctx, int n, const int *ptr) {
+    K x = k_new(ctx, n);
+    if (x && ptr) {
+        GAS_CHECK(ctx, n);
+        for (int i = 0; i < n; i++) x->f[i] = (double)ptr[i];
+    }
+    return x;
+}
+
+int k_copy_to_f64(K x, double *out, int max_n) {
+    if (!x || !out || max_n <= 0 || x->n <= 0) return 0;
+    int n = x->n < max_n ? x->n : max_n;
+    memcpy(out, x->f, (size_t)n * sizeof(double));
+    return n;
+}
+
+int k_copy_to_f32(K x, float *out, int max_n) {
+    if (!x || !out || max_n <= 0 || x->n <= 0) return 0;
+    int n = x->n < max_n ? x->n : max_n;
+    for (int i = 0; i < n; i++) out[i] = (float)x->f[i];
+    return n;
+}
+
+int k_copy_to_i32(K x, int *out, int max_n) {
+    if (!x || !out || max_n <= 0 || x->n <= 0) return 0;
+    int n = x->n < max_n ? x->n : max_n;
+    for (int i = 0; i < n; i++) out[i] = (int)x->f[i];
+    return n;
+}
+
+void bind_array_f64(ks_ctx *ctx, char name, int n, const double *ptr) {
+    ks_bind_vector(ctx, name, ptr, n);
+}
+
+void bind_array_f32(ks_ctx *ctx, char name, int n, const float *ptr) {
+    K x = k_from_f32(ctx, n, ptr);
+    char vn[2] = {name, 0};
+    if (x) {
+        K perm = k_new_perm(ctx, x->n);
+        if (perm) {
+            memcpy(perm->f, x->f, x->n * sizeof(double));
+            k_set_var_str(ctx, vn, perm);
+        }
+    }
+}
+
+void bind_array_i32(ks_ctx *ctx, char name, int n, const int *ptr) {
+    K x = k_from_i32(ctx, n, ptr);
+    char vn[2] = {name, 0};
+    if (x) {
+        K perm = k_new_perm(ctx, x->n);
+        if (perm) {
+            memcpy(perm->f, x->f, x->n * sizeof(double));
+            k_set_var_str(ctx, vn, perm);
+        }
+    }
 }
 
 /* --- Public API --- */
@@ -886,8 +1216,10 @@ K ks_eval(ks_ctx *ctx, const char *code, size_t len) {
 
     K result = NULL;
     if (buf && setjmp(ctx->recover) == 0) {
-        char *p_code = buf;
-        result = e(ctx, &p_code);
+        Token tokens[4096];
+        ks_lex(ctx, buf, tokens, 4096);
+        Token *t = tokens;
+        result = e_tok(ctx, &t);
         if (result) result = k_clone_owned(ctx, result);
     }
     free(buf);
@@ -919,3 +1251,13 @@ void p(ks_ctx *ctx, K x) {
 Copyright (c) 2026 octetta / Joseph Stewart
 MIT license at https://github.com/octetta/k-synth
 */
+
+void print_lex(ks_ctx *ctx, const char *c) {
+    Token tokens[100];
+    int n = ks_lex(ctx, c, tokens, 100);
+    for(int i=0; i<n; i++) {
+        if(tokens[i].type == TOK_ID) printf("ID: %s\n", tokens[i].str_val);
+        else if(tokens[i].type == TOK_SYM) printf("SYM: %c\n", tokens[i].c_val);
+        else printf("TYPE: %d\n", tokens[i].type);
+    }
+}

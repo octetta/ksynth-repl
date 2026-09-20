@@ -230,7 +230,7 @@ const char* ksynth_help_as_html(const char* ext) {
            "<li><b>\\b [0-127] [var]</b> - Bank a variable into slot 0-15</li>"
            "<li><b>\\pb [0-15] [semi] [cents] [gain] [atten]</b> - Play bank (optional params)</li>"
            "<li><b>\\ps [var]</b> - Play the variable (Stereo)</li>"
-           "<li><b>\\l [file]</b> - Load a file (handled by Hazel)</li>"
+           "<li><b>\\l [file]</b> - Load a file (handled by Hazel)</li>\n           <li><b>\\ra [var] [path]</b> - Read audio file into variable</li>"
            "<li><b>\\w [ms]</b> - Wait for N milliseconds</li>"
            "<li><b>\\s [var]</b> - Save to mono WAV (TBD)</li>"
            "<li><b>\\ss [var]</b> - Save to stereo WAV (TBD)</li>"
@@ -321,6 +321,33 @@ void my_eval_engine(const char* input, hazel_ctx_t* ctx, void* user_data) {
                     }
                 } else {
                     hazel_append_output(ctx, "Invalid bank slot\n", 1);
+                }
+            } else if (p[1] == 'r' && p[2] == 'a') {
+                char v_name[256];
+                char file_path[1024];
+                if (sscanf(p + 3, "%255s %1023s", v_name, file_path) == 2) {
+                    ma_decoder decoder;
+                    ma_decoder_config config = ma_decoder_config_init(ma_format_f32, 1, 44100);
+                    if (ma_decoder_init_file(file_path, &config, &decoder) == MA_SUCCESS) {
+                        ma_uint64 frames;
+                        ma_decoder_get_length_in_pcm_frames(&decoder, &frames);
+                        float* buf = (float*)malloc(frames * sizeof(float));
+                        if (buf) {
+                            ma_uint64 framesRead;
+                            ma_decoder_read_pcm_frames(&decoder, buf, frames, &framesRead);
+                            if (ks_ctx_set_var_str_f32(ks_handle, v_name, buf, (int)framesRead)) {
+                                char msg[256];
+                                snprintf(msg, sizeof(msg), "Loaded %llu frames into %s\n", (unsigned long long)framesRead, v_name);
+                                hazel_append_output(ctx, msg, 0);
+                            }
+                            free(buf);
+                        }
+                        ma_decoder_uninit(&decoder);
+                    } else {
+                        hazel_append_output(ctx, "Failed to load audio file\n", 1);
+                    }
+                } else {
+                    hazel_append_output(ctx, "Usage: \ra [var_name] [filepath]\n", 1);
                 }
             } else if (p[1] == 'p') {
                 int is_stereo = 0;

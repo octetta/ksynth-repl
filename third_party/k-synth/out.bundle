@@ -1,0 +1,2998 @@
+--- REPOSITORY STRUCTURE ---
+[Explicit File]: build.sh
+[Explicit File]: ksynth.c
+[Explicit File]: ksynth.h
+[Explicit File]: ks_api.c
+[Explicit File]: index.html
+
+--- SOURCE FILES ---
+
+--- FILE: build.sh ---
+```bash
+#!/usr/bin/env bash
+# build.sh — compile ksynth to WebAssembly via Emscripten
+#
+# Prerequisites:
+#   source /path/to/emsdk/emsdk_env.sh
+#
+# Output:
+#   ksynth.js   — Emscripten glue (ES module, MODULARIZE=1)
+#   ksynth.wasm — WebAssembly binary
+#
+# Place both files alongside index.html and serve with any static server.
+# For local dev: python3 -m http.server 8080
+
+set -e
+
+EXPORTED_FUNCTIONS='[
+  "_ks_init",
+  "_ks_run",
+  "_ks_get_buffer",
+  "_ks_get_length",
+  "_ks_get_error"
+]'
+
+EXPORTED_RUNTIME='[
+  "ccall",
+  "cwrap",
+  "UTF8ToString",
+  "stringToUTF8",
+  "lengthBytesUTF8",
+  "allocate",
+  "ALLOC_NORMAL",
+  "_malloc",
+  "_free"
+]'
+
+emcc \
+  ksynth.c \
+  ks_api.c \
+  -O2 \
+  -lm \
+  -s WASM=1 \
+  -s MODULARIZE=1 \
+  -s EXPORT_NAME=KSynth \
+  -s EXPORTED_FUNCTIONS="$(echo $EXPORTED_FUNCTIONS | tr -d ' \n')" \
+  -s EXPORTED_RUNTIME_METHODS="$(echo $EXPORTED_RUNTIME | tr -d ' \n')" \
+  -s ALLOW_MEMORY_GROWTH=1 \
+  -s TOTAL_STACK=1mb \
+  -s ENVIRONMENT=web \
+  -o ksynth.js
+
+echo "Build complete: ksynth.js + ksynth.wasm"
+echo "Serve with: python3 -m http.server 8080"
+```
+
+--- FILE: ksynth.c ---
+```c
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <math.h>
+#include "ksynth.h"
+
+K vars[26] = {0};   // A-Z user variables
+K args[2] = {0};    // x, y function arguments
+double filter_state[26][2];
+
+/* --- Safe Value Helper --- */
+
+static inline double safe_val(double v) {
+    if (isnan(v) || isinf(v)) return 0.0;
+    if (v > 1e6) return 1e6;
+    if (v < -1e6) return -1e6;
+    return v;
+}
+
+/* --- Lifecycle --- */
+
+K k_new(int n) {
+    if (n < 0) n = 0;
+    K x = malloc(sizeof(*x) + sizeof(double) * n);
+    if (!x) return NULL;
+    x->r = 1; x->n = n; return x;
+}
+
+void k_free(K x) { if (x && !--x->r) free(x); }
+
+K k_view(int n, double *ptr) {
+    K x = k_new(n);
+    if (x && ptr) memcpy(x->f, ptr, n * sizeof(double));
+    return x;
+}
+
+void bind_scalar(char name, double val) {
+    if (name < 'A' || name > 'Z') return;
+    int i = name - 'A';
+    K x = k_new(1); x->f[0] = val;
+    if (vars[i]) k_free(vars[i]);
+    vars[i] = x;
+}
+
+K k_get(char name) {
+    if (name < 'A' || name > 'Z' || !vars[name - 'A']) return NULL;
+    K v = vars[name - 'A'];
+    v->r++; return v;
+}
+
+/* --- Function Support --- */
+
+K k_func(char *body) {
+    int len = strlen(body) + 1;
+    int ndoubles = (len + sizeof(double) - 1) / sizeof(double);
+    K x = k_new(ndoubles);
+    x->n = -1;
+    memcpy(x->f, body, len);
+    return x;
+}
+
+int k_is_func(K x) {
+    return x && x->n == -1;
+}
+
+char* k_func_body(K x) {
+    return k_is_func(x) ? (char*)x->f : NULL;
+}
+
+K k_call(K fn, K *call_args, int nargs) {
+    if (!k_is_func(fn)) return NULL;
+
+    char *body = k_func_body(fn);
+    if (!body) return NULL;
+
+    int uses_x = (strchr(body, 'x') != NULL);
+    int uses_y = (strchr(body, 'y') != NULL);
+
+    int required = 0;
+    if (uses_y) required = 2;
+    else if (uses_x) required = 1;
+
+    if (nargs < required) {
+        fprintf(stderr, "Error: function requires %d argument%s, got %d\n",
+                required, required == 1 ? "" : "s", nargs);
+        return k_new(0);
+    }
+
+    K old_x = args[0];
+    K old_y = args[1];
+
+    args[0] = k_new(0);
+    args[1] = k_new(0);
+
+    if (nargs > 0 && call_args[0]) {
+        k_free(args[0]);
+        call_args[0]->r++;
+        args[0] = call_args[0];
+    }
+    if (nargs > 1 && call_args[1]) {
+        k_free(args[1]);
+        call_args[1]->r++;
+        args[1] = call_args[1];
+    }
+
+    char *s = body;
+    K result = e(&s);
+
+    if (args[0]) k_free(args[0]);
+    if (args[1]) k_free(args[1]);
+
+    args[0] = old_x;
+    args[1] = old_y;
+
+    return result;
+}
+
+/* --- Scan Adverb --- */
+
+K scan(char op, K b) {
+    if (!b || b->n < 1) return b;
+    K x = k_new(b->n);
+    double acc;
+
+    switch(op) {
+        case '+':
+            acc = 0.0;
+            for (int i = 0; i < b->n; i++) { acc += b->f[i]; x->f[i] = acc; }
+            break;
+        case '*':
+            acc = 1.0;
+            for (int i = 0; i < b->n; i++) { acc *= b->f[i]; x->f[i] = acc; }
+            break;
+        case '-':
+            acc = 0.0;
+            for (int i = 0; i < b->n; i++) { acc -= b->f[i]; x->f[i] = acc; }
+            break;
+        case '%':
+            acc = 1.0;
+            for (int i = 0; i < b->n; i++) {
+                if (b->f[i] != 0) acc /= b->f[i];
+                x->f[i] = acc;
+            }
+            break;
+        case '&':
+            acc = b->f[0];
+            x->f[0] = acc;
+            for (int i = 1; i < b->n; i++) {
+                if (b->f[i] < acc) acc = b->f[i];
+                x->f[i] = acc;
+            }
+            break;
+        case '|':
+            acc = b->f[0];
+            x->f[0] = acc;
+            for (int i = 1; i < b->n; i++) {
+                if (b->f[i] > acc) acc = b->f[i];
+                x->f[i] = acc;
+            }
+            break;
+        case '^':
+            acc = b->f[0];
+            x->f[0] = acc;
+            for (int i = 1; i < b->n; i++) {
+                acc = pow(acc, b->f[i]);
+                x->f[i] = acc;
+            }
+            break;
+        default:
+            fprintf(stderr, "Warning: scan not supported for '%c'\n", op);
+            memcpy(x->f, b->f, b->n * sizeof(double));
+            break;
+    }
+
+    k_free(b);
+    return x;
+}
+
+/* --- Verbs & Operators --- */
+
+K mo(char c, K b) {
+    if (!b) return NULL;
+
+    if (c >= 'A' && c <= 'Z') {
+        K var = vars[c - 'A'];
+        if (k_is_func(var)) {
+            K call_args[1] = {b};
+            return k_call(var, call_args, 1);
+        }
+    }
+
+    K x;
+
+    /* --- Scalar-consuming verbs (take N, return N-element vector) --- */
+
+    if (c == '!') {
+        int n = (int)b->f[0]; k_free(b);
+        x = k_new(n);
+        for (int j = 0; j < n; j++) x->f[j] = (double)j;
+        return x;
+    }
+
+    /* ~ : phase ramp 0 .. 2π*(N-1)/N */
+    if (c == '~') {
+        int n = (int)b->f[0]; k_free(b);
+        if (n < 1) return k_new(0);
+        x = k_new(n);
+        double twopi = 6.28318530717958647692;
+        for (int j = 0; j < n; j++) x->f[j] = twopi * (double)j / (double)n;
+        return x;
+    }
+
+    /* --- Reduction verbs (return scalar) --- */
+
+    if (c == '+') {
+        double t = 0;
+        for (int i = 0; i < b->n; i++) t += b->f[i];
+        x = k_new(1); x->f[0] = t;
+        k_free(b); return x;
+    }
+
+    if (c == '>') {
+        double m = 0;
+        for (int i = 0; i < b->n; i++) if (fabs(b->f[i]) > m) m = fabs(b->f[i]);
+        x = k_new(1); x->f[0] = m;
+        k_free(b); return x;
+    }
+
+    /* w : peak normalize */
+    if (c == 'w') {
+        double pk = 0.0;
+        for (int i = 0; i < b->n; i++) if (fabs(b->f[i]) > pk) pk = fabs(b->f[i]);
+        x = k_new(b->n);
+        double scale = (pk > 1e-10) ? 1.0 / pk : 0.0;
+        for (int i = 0; i < b->n; i++) x->f[i] = b->f[i] * scale;
+        k_free(b); return x;
+    }
+
+    /* --- Stereo channel extraction --- */
+
+    if (c == 'j') {
+        if (b->n < 2) { k_free(b); return k_new(0); }
+        x = k_new(b->n / 2);
+        for (int i = 0; i < x->n; i++) x->f[i] = b->f[i*2];
+        k_free(b); return x;
+    }
+
+    if (c == 'k') {
+        if (b->n < 2) { k_free(b); return k_new(0); }
+        x = k_new(b->n / 2);
+        for (int i = 0; i < x->n; i++) x->f[i] = b->f[i*2+1];
+        k_free(b); return x;
+    }
+
+    /* v : quantize to 4 levels (monadic default) */
+    if (c == 'v') {
+        x = k_new(b->n);
+        for (int i = 0; i < b->n; i++)
+            x->f[i] = floor(b->f[i] * 4.0) / 4.0;
+        k_free(b); return x;
+    }
+
+    /* --- Element-wise verbs --- */
+
+    x = k_new(b->n);
+    for (int i = 0; i < b->n; i++) {
+        double v = b->f[i];
+        switch (c) {
+            case 's': x->f[i] = sin(v); break;
+            case 'c': x->f[i] = cos(v); break;
+            case 't': x->f[i] = tan(v); break;
+            case 'h': x->f[i] = tanh(v); break;
+            case 'a': x->f[i] = fabs(v); break;
+            case 'q': x->f[i] = sqrt(fabs(v)); break;
+            case 'l': x->f[i] = log(fabs(v) + 1e-10); break;
+            case 'e': {
+                double cl = (v > 100) ? 100 : ((v < -100) ? -100 : v);
+                x->f[i] = exp(cl);
+                break;
+            }
+            case '_': x->f[i] = floor(v); break;
+            case 'r': x->f[i] = ((double)rand() / (double)RAND_MAX) * 2.0 - 1.0; break;
+            case 'p': {
+                if (v == 0) x->f[i] = 44100;
+                else x->f[i] = 3.14159265358979323846 * v;
+                break;
+            }
+            /* i : reverse — formerly ~ */
+            case 'i': x->f[i] = b->f[b->n - 1 - i]; break;
+            case 'x': x->f[i] = exp(-5.0 * v); break;
+            case 'd': x->f[i] = tanh(v * 3.0); break;
+            case 'm': {
+                unsigned int clock = i;
+                unsigned int hh = (clock * 13) ^ (clock >> 5) ^ (clock * 193);
+                x->f[i] = (hh & 128) ? 0.7 : -0.7;
+                break;
+            }
+            case 'b': {
+                double ff[] = {2.43, 3.01, 3.52, 4.11, 5.23, 6.78};
+                double ss = 0;
+                for (int j = 0; j < 6; j++)
+                    ss += (sin(i * 0.1 * ff[j]) > 0) ? 1.0 : -1.0;
+                x->f[i] = ss / 6.0;
+                break;
+            }
+            case 'u': {
+                x->f[i] = (i < 10) ? (double)i / 10.0 : 1.0;
+                break;
+            }
+            case 'n': {
+                x->f[i] = 440.0 * pow(2.0, (v - 69.0) / 12.0);
+                break;
+            }
+            default: x->f[i] = v; break;
+        }
+    }
+    k_free(b); return x;
+}
+
+K dy(char c, K a, K b) {
+    if (!a || !b) { k_free(a); k_free(b); return NULL; }
+
+    if (c >= 'A' && c <= 'Z') {
+        K var = vars[c - 'A'];
+        if (k_is_func(var)) {
+            K call_args[2] = {a, b};
+            return k_call(var, call_args, 2);
+        }
+    }
+
+    K x;
+
+    /* z : stereo interleave */
+    if (c == 'z') {
+        int mn = (a->n < b->n) ? a->n : b->n;
+        x = k_new(mn * 2);
+        for (int i = 0; i < mn; i++) {
+            x->f[i*2]   = a->f[i];
+            x->f[i*2+1] = b->f[i];
+        }
+        k_free(a); k_free(b); return x;
+    }
+
+    /* o : additive outer-product-sum, equal amplitudes
+     * a = phase vector [N], b = harmonic numbers [M]
+     * result[i] = Σ_j sin(a[i] * b[j])
+     * produces a wavetable of length N (one value per phase point)
+     * all harmonics contribute equally — use $ for amplitude weighting */
+    if (c == 'o') {
+        x = k_new(a->n);
+        for (int i = 0; i < a->n; i++) {
+            double acc = 0.0;
+            for (int j = 0; j < b->n; j++)
+                acc += sin(a->f[i] * b->f[j]);
+            x->f[i] = acc;
+        }
+        k_free(a); k_free(b); return x;
+    }
+
+    /* $ : weighted additive synthesis from amplitude spectrum
+     * a = phase vector [N], b = amplitude array [M]
+     * b[j] is the amplitude of harmonic (j+1)
+     * result[i] = Σ_j b[j] * sin(a[i] * (j+1))
+     * produces a wavetable of length N
+     * example: P $ (1 .5 .333 .25) gives 4-harmonic sawtooth */
+    if (c == '$') {
+        x = k_new(a->n);
+        for (int i = 0; i < a->n; i++) {
+            double acc = 0.0;
+            for (int j = 0; j < b->n; j++)
+                acc += b->f[j] * sin(a->f[i] * (double)(j + 1));
+            x->f[i] = acc;
+        }
+        k_free(a); k_free(b); return x;
+    }
+
+    /* v : quantize b to N levels, a = number of levels */
+    if (c == 'v') {
+        double levels = (a->n > 0 && a->f[0] > 0) ? a->f[0] : 4.0;
+        x = k_new(b->n);
+        for (int i = 0; i < b->n; i++)
+            x->f[i] = floor(b->f[i] * levels) / levels;
+        k_free(a); k_free(b); return x;
+    }
+
+    /* f : two-pole lowpass filter */
+    if (c == 'f') {
+        x = k_new(b->n); double b0 = 0, b1 = 0;
+        for (int i = 0; i < b->n; i++) {
+            double ct = (a->n > i) ? a->f[i] : a->f[0];
+            double rs = (a->n >= 2) ? a->f[1] : 0.0;
+            if (ct > 0.95) ct = 0.95;
+            if (rs > 3.98) rs = 3.98;
+            double in = b->f[i] - (rs * b1);
+            b0 += ct * (in - b0); b1 += ct * (b0 - b1);
+            b0 = safe_val(b0);
+            b1 = safe_val(b1);
+            x->f[i] = b1;
+        }
+    /* g gemini look here */
+  } else if (c == 'g') {
+        /* FORCE result to be signal length only, ignoring parameter vector length */
+        x = k_new(b->n); 
+        
+        int slot = (a->n >= 3) ? (int)a->f[2] % 26 : 0;
+        filter_state[slot][0] = 0.0; 
+        filter_state[slot][1] = 0.0; 
+
+        double static_f = a->f[0];
+        double q_val = (a->n >= 2) ? a->f[1] : 0.5;
+        double damp = 1.0 / (q_val < 0.01 ? 0.01 : q_val);
+
+        for (int i = 0; i < b->n; i++) {
+            double f_hz = (a->n == b->n) ? a->f[i] : static_f;
+            double f_coeff = 2.0 * sin(3.141592653589793 * f_hz / 44100.0);
+            if (f_coeff > 2.0) f_coeff = 2.0;
+
+            double hp = b->f[i] - filter_state[slot][0] - damp * filter_state[slot][1];
+            filter_state[slot][1] += f_coeff * hp;
+            filter_state[slot][0] += f_coeff * filter_state[slot][1];
+            
+            /* This line MUST only index up to b->n */
+            x->f[i] = filter_state[slot][1]; 
+        }
+        /* The fall-through will k_free(a) and k_free(b) */
+    /* y : feedback delay, a = [samples] or [samples gain] */
+    } else if (c == 'y') {
+        int dd   = (int)a->f[0];
+        double g = (a->n > 1) ? a->f[1] : 0.4;
+        x = k_new(b->n);
+        for (int i = 0; i < b->n; i++) {
+            double delayed = (i >= dd) ? x->f[i-dd] : 0;
+            x->f[i] = safe_val(b->f[i] + (g * delayed));
+        }
+    /* # : repeat/tile b to length a */
+    } else if (c == '#') {
+        int n = (int)a->f[0]; x = k_new(n);
+        if (b->n > 0) for (int i = 0; i < n; i++) x->f[i] = b->f[i % b->n];
+    /* , : concatenate */
+    } else if (c == ',') {
+        x = k_new(a->n + b->n);
+        memcpy(x->f, a->f, a->n * sizeof(double));
+        memcpy(x->f + a->n, b->f, b->n * sizeof(double));
+    } else {
+        int mn = a->n > b->n ? a->n : b->n; x = k_new(mn);
+        for (int i = 0; i < mn; i++) {
+            double va = a->f[i % a->n], vb = b->f[i % b->n];
+            switch (c) {
+                case '+': x->f[i] = va + vb; break;
+                case '*': x->f[i] = va * vb; break;
+                case '-': x->f[i] = va - vb; break;
+                case '%': x->f[i] = (vb == 0) ? 0 : va / vb; break;
+                case '^': x->f[i] = safe_val(pow(fabs(va), vb)); break;
+                case '&': x->f[i] = va < vb ? va : vb; break;
+                case '|': x->f[i] = va > vb ? va : vb; break;
+                case '<': x->f[i] = va < vb ? 1.0 : 0.0; break;
+                case '>': x->f[i] = va > vb ? 1.0 : 0.0; break;
+                case '=': x->f[i] = va == vb ? 1.0 : 0.0; break;
+                default:  x->f[i] = 0; break;
+            }
+        }
+    }
+    k_free(a); k_free(b); return x;
+}
+
+/* --- Parser --- */
+
+K e(char **s);
+K atom(char **s);
+
+K expr(char **s) {
+    K x = atom(s);
+    while (**s == ' ') (*s)++;
+
+    if (k_is_func(x) && **s && **s != '\n' && **s != ')' && **s != ';' && **s != '}' && **s != '/') {
+        char peek = **s;
+        int is_operator = (peek == '+' || peek == '-' || peek == '*' ||
+                          peek == '%' || peek == '^' || peek == '&' ||
+                          peek == '|' || peek == '<' || peek == '>' ||
+                          peek == '=' || peek == ',' || peek == '#' ||
+                          peek == 'o' || peek == '$' ||
+                          peek == 'f' || peek == 'z' ||
+                          peek == 's' || peek == 't' || peek == 'h' ||
+                          peek == 'a' || peek == 'q' || peek == 'l' ||
+                          peek == 'e' || peek == 'r' || peek == 'p' ||
+                          peek == 'c' || peek == 'i' || peek == 'w' ||
+                          peek == 'd' || peek == 'v' || peek == 'm' ||
+                          peek == 'b' || peek == 'u' || peek == 'j' ||
+                          peek == 'k' || peek == 'n' || peek == 'g');
+        if (!is_operator) {
+            K arg = expr(s);
+            K call_args[1] = {arg};
+            K result = k_call(x, call_args, 1);
+            k_free(x);
+            return result;
+        }
+    }
+
+    if (!**s || **s == '\n' || **s == ')' || **s == ';' || **s == '}' || **s == '/') return x;
+    char op = *(*s)++;
+    return dy(op, x, expr(s));
+}
+
+K atom(char **s) {
+    while (**s == ' ') (*s)++;
+    /* / begins a line comment — skip to end of line, then continue */
+    if (**s == '/') {
+        while (**s && **s != '\n') (*s)++;
+        if (**s == '\n') (*s)++;
+        /* tail-call: try again on the next line */
+        return atom(s);
+    }
+    if (!**s || **s == '\n' || **s == ')' || **s == ';') return NULL;
+
+    if (**s == '(') {
+        (*s)++; K x = e(s);
+        if (**s == ')') (*s)++;
+        return x;
+    }
+
+    if (**s == '{') {
+        (*s)++;
+        char *start = *s;
+        int depth = 1;
+        while (**s && depth > 0) {
+            if (**s == '{') depth++;
+            else if (**s == '}') depth--;
+            (*s)++;
+        }
+        if (depth == 0) {
+            int len = (*s - 1) - start;
+            char *body = malloc(len + 1);
+            memcpy(body, start, len);
+            body[len] = '\0';
+            K func = k_func(body);
+            free(body);
+            return func;
+        }
+        return NULL;
+    }
+
+    char c = **s;
+
+    if ((c >= '0' && c <= '9') || (c == '.' && (*s)[1] >= '0') ||
+        (c == '-' && ((*s)[1] >= '0' || (*s)[1] == '.'))) {
+        double buf[1024]; int n = 0;
+        char *ptr = *s;
+        while (n < 1024) {
+            buf[n++] = strtod(ptr, &ptr);
+            char *after = ptr;               /* position right after parsed number */
+            char *peek  = ptr;
+            while (*peek == ' ') peek++;
+            /* K rule: '-' with whitespace before it = negation (continue vector)
+             *         '-' flush against previous token = subtraction (stop)    */
+            int had_space = (peek != after);
+            if (*peek >= '0' && *peek <= '9') {
+                ptr = peek; continue;        /* next positive literal */
+            }
+            if (*peek == '-' && peek[1] >= '0' && had_space) {
+                ptr = peek; continue;        /* spaced minus = negation, vector continues */
+            }
+            break;                           /* flush minus = subtraction, or end of input */
+        }
+        *s = ptr;
+        K x = k_new(n); memcpy(x->f, buf, n * sizeof(double));
+        return x;
+    }
+
+    (*s)++;
+
+    if (**s == ':') {
+        (*s)++; K x = expr(s);
+        if (c >= 'A' && c <= 'Z') {
+            int i = c - 'A';
+            if (vars[i]) k_free(vars[i]);
+            if (x) { x->r++; vars[i] = x; }
+        }
+        if (x) x->r++;
+        return x;
+    }
+
+    if (c >= 'A' && c <= 'Z') return k_get(c);
+
+    if (c == 'x') return args[0] ? (args[0]->r++, args[0]) : k_new(0);
+    if (c == 'y') return args[1] ? (args[1]->r++, args[1]) : k_new(0);
+
+    int is_scan = 0;
+    while (**s == ' ') (*s)++;
+    if (**s == '\\') {
+        is_scan = 1;
+        (*s)++;
+    }
+
+    K arg = e(s);
+
+    if (is_scan) {
+        return scan(c, arg);
+    } else {
+        return mo(c, arg);
+    }
+}
+
+K e(char **s) {
+    K x = atom(s);
+    while (**s == ' ') (*s)++;
+
+    while (**s == ';') {
+        (*s)++;
+        if (x) k_free(x);
+        while (**s == ' ') (*s)++;
+        if (!**s || **s == '\n' || **s == ')' || **s == '}') return k_new(0);
+        x = atom(s);
+        while (**s == ' ') (*s)++;
+    }
+
+    if (k_is_func(x) && **s && **s != '\n' && **s != ')' && **s != ';' && **s != '/') {
+        char peek = **s;
+        int is_operator = (peek == '+' || peek == '-' || peek == '*' ||
+                          peek == '%' || peek == '^' || peek == '&' ||
+                          peek == '|' || peek == '<' || peek == '>' ||
+                          peek == '=' || peek == ',' || peek == '#' ||
+                          peek == 'o' || peek == '$' ||
+                          peek == 'f' || peek == 'y' || peek == 'z' ||
+                          peek == 's' || peek == 't' || peek == 'h' ||
+                          peek == 'a' || peek == 'q' || peek == 'l' ||
+                          peek == 'e' || peek == 'r' || peek == 'p' ||
+                          peek == 'c' || peek == 'i' || peek == 'w' ||
+                          peek == 'd' || peek == 'v' || peek == 'm' ||
+                          peek == 'b' || peek == 'u' || peek == 'j' ||
+                          peek == 'k' || peek == 'n' || peek == 'g');
+        if (!is_operator) {
+            K arg = e(s);
+            K call_args[1] = {arg};
+            K result = k_call(x, call_args, 1);
+            k_free(x);
+            return result;
+        }
+    }
+
+    if (!**s || **s == '\n' || **s == ')' || **s == ';' || **s == '/') return x;
+    char op = *(*s)++;
+    return dy(op, x, e(s));
+}
+
+void p(K x) {
+    if (!x) return;
+    if (k_is_func(x)) {
+        printf("{%s}\n", k_func_body(x));
+        return;
+    }
+    if (x->n == 1) printf("%.4f\n", x->f[0]);
+    else printf("Array[%d]\n", x->n);
+}
+```
+
+--- FILE: ksynth.h ---
+```c
+#ifndef KSYNTH_H
+#define KSYNTH_H
+
+#include <stdlib.h>
+#include <string.h>
+
+typedef struct { int r, n; double f[]; } *K;
+extern K vars[26];    // A-Z
+extern K args[2];     // x, y (function arguments)
+
+K e(char **s);
+void p(K x);
+void k_free(K x);
+K k_new(int n);
+
+// Function support
+K k_func(char *body);
+K k_call(K fn, K *call_args, int nargs);
+int k_is_func(K x);
+
+// C API Integration
+K k_view(int n, double *ptr);
+void bind_scalar(char name, double val);
+K k_get(char name);
+char* k_func_body(K x);
+
+#endif
+```
+
+--- FILE: ks_api.c ---
+```c
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include "ksynth.h"
+
+/* Internal state */
+static float  *ks_buf    = NULL;
+static int     ks_len    = 0;
+static char    ks_err[256] = {0};
+
+/* ── helpers ─────────────────────────────────────────────────────────── */
+
+static void clear_vars(void) {
+    for (int i = 0; i < 26; i++) {
+        if (vars[i]) { k_free(vars[i]); vars[i] = NULL; }
+    }
+    for (int i = 0; i < 2; i++) {
+        if (args[i]) { k_free(args[i]); args[i] = NULL; }
+    }
+}
+
+static K run_line(const char *line) {
+    char buf[8192];
+    strncpy(buf, line, sizeof(buf)-1);
+    buf[sizeof(buf)-1] = 0;
+    char *s = buf;
+    return e(&s);
+}
+
+/* ── public API ──────────────────────────────────────────────────────── */
+
+/* Call once at startup */
+void ks_init(void) {
+    clear_vars();
+    ks_buf = NULL;
+    ks_len = 0;
+    ks_err[0] = 0;
+}
+
+/*
+ * Run a complete ksynth script (newline-separated lines).
+ * Returns number of samples in W on success, -1 on error.
+ * Call ks_get_buffer() / ks_get_length() after a successful run.
+ */
+int ks_run(const char *script) {
+    ks_err[0] = 0;
+
+    /* Free previous output buffer */
+    if (ks_buf) { free(ks_buf); ks_buf = NULL; ks_len = 0; }
+
+    /* Clear all variables for a fresh evaluation */
+    clear_vars();
+
+    /* Process line by line — exactly as ksrun.c does */
+    const char *p = script;
+    char line[8192];
+    while (*p) {
+        /* extract one line */
+        const char *nl = strchr(p, '\n');
+        int len = nl ? (int)(nl - p) : (int)strlen(p);
+        if (len >= (int)sizeof(line)) len = (int)sizeof(line) - 1;
+        memcpy(line, p, len);
+        line[len] = 0;
+        p = nl ? nl + 1 : p + len;
+
+        /* skip blank lines and comments */
+        if (line[0] == 0 || line[0] == '/') continue;
+
+        K result = run_line(line);
+        if (result) k_free(result);
+    }
+
+    /* Extract W */
+    K w = k_get('W');
+    if (!w || w->n <= 0) {
+        snprintf(ks_err, sizeof(ks_err),
+                 w ? "W is empty" : "no W variable set");
+        if (w) k_free(w);
+        return -1;
+    }
+
+    /* Copy doubles → floats into our buffer */
+    ks_len = w->n;
+    ks_buf = (float*)malloc(ks_len * sizeof(float));
+    if (!ks_buf) {
+        snprintf(ks_err, sizeof(ks_err), "out of memory");
+        k_free(w);
+        ks_len = 0;
+        return -1;
+    }
+    for (int i = 0; i < ks_len; i++) {
+        double v = w->f[i];
+        if (v >  1.0) v =  1.0;
+        if (v < -1.0) v = -1.0;
+        ks_buf[i] = (float)v;
+    }
+    k_free(w);
+    return ks_len;
+}
+
+/* Pointer to the float output buffer (valid until next ks_run call) */
+float *ks_get_buffer(void) { return ks_buf; }
+
+/* Number of samples in the buffer */
+int ks_get_length(void) { return ks_len; }
+
+/* Last error string (empty string if no error) */
+const char *ks_get_error(void) { return ks_err; }
+```
+
+--- FILE: index.html ---
+```text
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A//www.w3.org/2000/svg%22%20viewBox%3D%220%200%2032%2032%22%3E%3Crect%20width%3D%2232%22%20height%3D%2232%22%20rx%3D%226%22%20fill%3D%22%23111%22/%3E%3Cpolyline%20fill%3D%22none%22%20stroke%3D%22%233fb854%22%20stroke-width%3D%222.5%22%20stroke-linecap%3D%22round%22%20stroke-linejoin%3D%22round%22%20points%3D%222%2C16%206%2C16%209%2C6%2013%2C26%2017%2C6%2021%2C26%2025%2C16%2030%2C16%22/%3E%3C/svg%3E">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>ksynth</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+/* ── reset & base ─────────────────────────────────────────────────── */
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+/* ── themes ───────────────────────────────────────────────────────── */
+:root, [data-theme="retro"] {
+  --bg:        #0e1116;
+  --surface:   #161b22;
+  --surface2:  #1c2128;
+  --border:    #21262d;
+  --border2:   #30363d;
+  --text:      #e6edf3;
+  --muted:     #7d8590;
+  --accent:    #3fb950;
+  --accent-dim:#1a3a1f;
+  --error:     #f85149;
+  --error-dim: #3a1a1a;
+  --warn:      #d29922;
+  --font:      'JetBrains Mono', 'Cascadia Code', 'Fira Mono', monospace;
+  --radius:    4px;
+}
+
+[data-theme="dark"] {
+  --bg:        #1a1a2e;
+  --surface:   #16213e;
+  --surface2:  #0f3460;
+  --border:    #1a2a4a;
+  --border2:   #2a3a5a;
+  --text:      #e0e0ff;
+  --muted:     #8888bb;
+  --accent:    #e94560;
+  --accent-dim:#3a0f1a;
+  --error:     #ff6b6b;
+  --error-dim: #3a1a1a;
+  --warn:      #ffa500;
+  --font:      'JetBrains Mono', 'Cascadia Code', 'Fira Mono', monospace;
+  --radius:    4px;
+}
+
+[data-theme="light"] {
+  --bg:        #f5f5f0;
+  --surface:   #ffffff;
+  --surface2:  #ebebeb;
+  --border:    #d0d0c8;
+  --border2:   #b8b8b0;
+  --text:      #1a1a1a;
+  --muted:     #666660;
+  --accent:    #0070f3;
+  --accent-dim:#ddeeff;
+  --error:     #cc0000;
+  --error-dim: #ffeeee;
+  --warn:      #996600;
+  --font:      'JetBrains Mono', 'Cascadia Code', 'Fira Mono', monospace;
+  --radius:    4px;
+}
+
+html, body {
+  height: 100%;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font);
+  font-size: 13px;
+  line-height: 1.5;
+  overflow: hidden;
+}
+
+/* ── layout ───────────────────────────────────────────────────────── */
+#app {
+  display: flex;
+  flex-direction: column;
+  width: 100vw;
+  /* dvh tracks Safari's collapsing toolbar; svh is the minimum (toolbar always visible);
+     100svh is the safe conservative value that never gets clipped */
+  height: 100svh;
+  height: 100dvh;
+  max-height: 100dvh;
+  overflow-x: hidden;
+  overflow-y: hidden;
+}
+
+/* slot strip — 2 rows of 8 so all 16 slots always visible */
+#slot-strip {
+  display: grid;
+  grid-template-columns: repeat(8, 1fr);
+  grid-template-rows: auto auto;
+  gap: 4px;
+  padding: 8px;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+  width: 100%;
+  position: sticky;
+  top: 0;
+  z-index: 10;
+}
+
+/* main area — horizontal on desktop, vertical on mobile */
+#main {
+  display: flex;
+  flex-direction: row;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+  width: 100%;
+}
+
+/* left panel: notebook */
+#left-panel {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-width: 0;  /* shrinks to zero before right panel clips */
+  overflow: hidden;
+}
+
+#notebook {
+  flex: 1;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding: 0;
+  min-height: 0;
+}
+
+/* drag divider — desktop only */
+#divider {
+  width: 5px;
+  flex-shrink: 0;
+  background: var(--border);
+  cursor: col-resize;
+  transition: background 80ms;
+}
+#divider:hover, #divider.dragging { background: var(--accent); }
+
+/* right panel: editor — fixed width on desktop, full width on mobile */
+#right-panel {
+  display: flex;
+  flex-direction: column;
+  flex-shrink: 0;
+  width: var(--right-w, 40%);
+  min-width: 220px;
+  overflow: hidden;
+}
+
+/* input zone fills right panel */
+#input-zone {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+  border-left: 1px solid var(--border);
+  background: var(--surface);
+}
+
+/* editor fills remaining space in input zone */
+#editor {
+  flex: 1;
+  min-height: 60px;
+  overflow-y: auto;
+}
+
+/* pad overlay */
+#pad-overlay {
+  display: none;
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,0.7);
+  z-index: 100;
+  align-items: center;
+  justify-content: center;
+}
+#pad-overlay.open { display: flex; }
+
+/* ── mobile/tablet: stack vertically ─────────────────────────────── */
+@media (max-width: 767px) {
+  #main        { flex-direction: column; }
+  #divider     { display: none; }
+  #left-panel  { flex: 1; min-height: 0; min-width: 0; }
+  #right-panel {
+    width: 100% !important;
+    min-width: 0 !important;
+    flex-shrink: 0;
+    height: 40vh;
+    min-height: 160px;
+  }
+  #input-zone {
+    border-left: none;
+    border-top: 1px solid var(--border);
+  }
+}
+
+/* ── desktop: show divider ────────────────────────────────────────── */
+@media (min-width: 768px) {
+  #divider { display: block; }
+}
+
+/* ── slot strip ───────────────────────────────────────────────────── */
+.slot-card {
+  height: 60px;
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 4px 5px;
+  cursor: pointer;
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  transition: border-color 80ms;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none; /* suppress iOS callout menu */
+}
+.slot-card.filled { border-color: var(--border2); }
+.slot-card.filled:hover { border-color: var(--accent); }
+.slot-card.active { border-color: var(--accent); background: var(--accent-dim); }
+
+.slot-idx {
+  font-size: 10px;
+  color: var(--muted);
+  font-weight: 600;
+  letter-spacing: 0.05em;
+}
+.slot-label {
+  font-size: 10px;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  flex: 1;
+}
+.slot-wave {
+  width: 100%;
+  height: 20px;
+  display: block;
+}
+.slot-rate {
+  font-size: 9px;
+  color: var(--muted);
+  text-align: right;
+}
+.slot-empty-hint {
+  font-size: 9px;
+  color: var(--border2);
+  margin-top: auto;
+  text-align: center;
+}
+
+/* slot context menu */
+#slot-menu {
+  position: fixed;
+  background: var(--surface2);
+  border: 1px solid var(--border2);
+  border-radius: var(--radius);
+  padding: 4px 0;
+  z-index: 200;
+  min-width: 160px;
+  display: none;
+}
+#slot-menu.open { display: block; }
+.slot-menu-item {
+  padding: 6px 12px;
+  cursor: pointer;
+  font-size: 12px;
+  color: var(--text);
+}
+.slot-menu-item:hover { background: var(--border); }
+.slot-menu-item.danger { color: var(--error); }
+
+/* ── notebook ─────────────────────────────────────────────────────── */
+.nb-cell {
+  border-bottom: 1px solid var(--border);
+  padding: 10px 14px;
+}
+.nb-cell.error-cell { background: var(--error-dim); }
+
+.nb-cell-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+.nb-status {
+  font-size: 11px;
+  font-weight: 600;
+}
+.nb-status.ok  { color: var(--accent); }
+.nb-status.err { color: var(--error); }
+
+.nb-meta {
+  font-size: 11px;
+  color: var(--muted);
+  flex: 1;
+}
+
+.nb-bank-row {
+  display: flex;
+  gap: 3px;
+  flex-wrap: wrap;
+  margin-top: 6px;
+}
+.nb-bank-btn {
+  background: var(--surface2);
+  border: 1px solid var(--border2);
+  border-radius: var(--radius);
+  color: var(--muted);
+  font-family: var(--font);
+  font-size: 10px;
+  padding: 2px 5px;
+  cursor: pointer;
+  transition: border-color 80ms, color 80ms;
+}
+.nb-bank-btn:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.nb-code {
+  font-size: 12px;
+  color: var(--muted);
+  white-space: pre-wrap;
+  word-break: break-all;
+  line-height: 1.6;
+  margin-bottom: 4px;
+  transition: color 80ms;
+  border-radius: var(--radius);
+  padding: 2px 4px;
+  margin-left: -4px;
+}
+.nb-code:hover {
+  color: var(--text);
+  background: var(--surface2);
+}
+
+.nb-wave-wrap {
+  margin-top: 6px;
+}
+.nb-wave {
+  width: 100%;
+  height: 40px;
+  display: block;
+  border-radius: 2px;
+}
+
+/* ── input zone ───────────────────────────────────────────────────── */
+#input-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+  flex-wrap: wrap;  /* wrap to second line if too narrow */
+}
+
+#input-label {
+  color: var(--accent);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+#btn-run {
+  background: var(--accent-dim);
+  border: 1px solid var(--accent);
+  border-radius: var(--radius);
+  color: var(--accent);
+  font-family: var(--font);
+  font-size: 11px;
+  padding: 3px 10px;
+  cursor: pointer;
+  transition: background 80ms;
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+#btn-run:hover { background: var(--accent-dim); filter: brightness(1.3); }
+
+#btn-clear {
+  background: transparent;
+  border: 1px solid var(--border2);
+  border-radius: var(--radius);
+  color: var(--muted);
+  font-family: var(--font);
+  font-size: 11px;
+  padding: 3px 8px;
+  cursor: pointer;
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+#btn-clear:hover { border-color: var(--muted); color: var(--text); }
+
+.nb-dl-btn {
+  background: transparent;
+  border: none;
+  color: var(--muted);
+  font-size: 10px;
+  padding: 0 4px;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 100ms, color 100ms;
+  line-height: 1;
+  font-family: var(--font);
+}
+.nb-cell-header:hover .nb-dl-btn { opacity: 1; }
+.nb-dl-btn:hover { color: var(--accent); opacity: 1; }
+
+.nb-del-btn {
+  background: transparent;
+  border: none;
+  color: var(--muted);
+  font-family: var(--font);
+  font-size: 13px;
+  padding: 0 6px;
+  cursor: pointer;
+  line-height: 1;
+  margin-left: auto;
+  flex-shrink: 0;
+  opacity: 0.4;
+  transition: opacity 80ms, color 80ms;
+}
+.nb-cell-header:hover .nb-del-btn { opacity: 1; }
+.nb-del-btn:hover { color: var(--error); opacity: 1; }
+
+#btn-save, #btn-load, #btn-patches, #btn-theme, #btn-guide, #btn-readme, #btn-pad, #btn-fix {
+  background: transparent;
+  border: 1px solid var(--border2);
+  border-radius: var(--radius);
+  color: var(--muted);
+  font-family: var(--font);
+  font-size: 11px;
+  padding: 3px 8px;
+  cursor: pointer;
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+#btn-save:hover, #btn-load:hover, #btn-patches:hover, #btn-theme:hover, #btn-guide:hover, #btn-readme:hover, #btn-pad:hover, #btn-fix:hover { border-color: var(--text); color: var(--text); }
+#btn-pad.active { border-color: var(--accent); color: var(--accent); }
+
+#input-meta {
+  font-size: 11px;
+  color: var(--muted);
+  padding: 0 10px;
+}
+
+#editor {
+  width: 100%;
+  background: var(--bg);
+  border: none;
+  outline: none;
+  resize: none;
+  color: var(--text);
+  font-family: var(--font);
+  font-size: 13px;
+  line-height: 1.7;
+  padding: 10px 14px;
+  height: 160px; /* overridden to flex: 1 on desktop via #input-zone flex */
+  caret-color: var(--accent);
+}
+#editor::placeholder { color: var(--border2); }
+#editor:focus { background: var(--surface2); }
+
+#input-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+  flex-wrap: wrap;
+}
+
+#input-footer {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 10px;
+  border-top: 1px solid var(--border);
+}
+#input-hint {
+  font-size: 10px;
+  color: var(--border2);
+}
+#wasm-status {
+  margin-left: auto;
+  font-size: 10px;
+  color: var(--muted);
+}
+#wasm-status.ready { color: var(--accent); }
+#wasm-status.error { color: var(--error); }
+
+/* ── pad overlay ─────────────────────────────────────────────────── */
+#pad-panel {
+  background: var(--surface);
+  border: 1px solid var(--border2);
+  border-radius: 6px;
+  padding: 16px;
+  width: 480px;
+  max-width: 95vw;
+}
+
+#pad-header {
+  display: flex;
+  align-items: center;
+  margin-bottom: 12px;
+  gap: 8px;
+}
+#pad-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text);
+  flex: 1;
+}
+.pad-preset-btn {
+  background: transparent;
+  border: 1px solid var(--border2);
+  border-radius: var(--radius);
+  color: var(--muted);
+  font-family: var(--font);
+  font-size: 10px;
+  padding: 2px 7px;
+  cursor: pointer;
+}
+.pad-preset-btn:hover { border-color: var(--accent); color: var(--accent); }
+.pad-preset-btn.active { border-color: var(--accent); color: var(--accent); background: var(--accent-dim); }
+
+#btn-pad-close {
+  background: transparent;
+  border: none;
+  color: var(--muted);
+  font-size: 16px;
+  cursor: pointer;
+  padding: 0 4px;
+  line-height: 1;
+}
+#btn-pad-close:hover { color: var(--text); }
+
+#pad-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 6px;
+  touch-action: none; /* prevent pinch-zoom on the grid */
+}
+
+.pad-button {
+  aspect-ratio: 1;
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  user-select: none;
+  transition: background 50ms, border-color 50ms;
+  position: relative;
+  padding: 4px;
+  gap: 2px;
+  touch-action: manipulation; /* prevents double-tap zoom on iOS */
+  -webkit-tap-highlight-color: transparent;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none; /* suppress iOS callout menu */
+}
+.pad-button.filled { border-color: var(--border2); }
+.pad-button.filled:hover { border-color: var(--accent); }
+.pad-button.playing {
+  background: var(--accent-dim);
+  border-color: var(--accent);
+}
+.pad-button:active { background: var(--accent-dim); }
+
+.pad-btn-slot {
+  font-size: 9px;
+  color: var(--muted);
+}
+.pad-btn-label {
+  font-size: 9px;
+  color: var(--text);
+  text-align: center;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.pad-btn-rate {
+  font-size: 8px;
+  color: var(--muted);
+}
+.pad-btn-empty {
+  font-size: 8px;
+  color: var(--border2);
+}
+.pad-btn-key {
+  font-size: 8px;
+  color: var(--border2);
+  position: absolute;
+  top: 3px;
+  right: 4px;
+  line-height: 1;
+}
+.pad-button { position: relative; }
+
+/* pad config popup */
+#pad-config {
+  position: fixed;
+  background: var(--surface2);
+  border: 1px solid var(--border2);
+  border-radius: var(--radius);
+  padding: 10px;
+  z-index: 300;
+  display: none;
+  width: 200px;
+}
+#pad-config.open { display: block; }
+.pc-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 6px;
+}
+.pc-label {
+  font-size: 11px;
+  color: var(--muted);
+  width: 50px;
+  flex-shrink: 0;
+}
+.pc-select, .pc-input {
+  flex: 1;
+  background: var(--bg);
+  border: 1px solid var(--border2);
+  border-radius: var(--radius);
+  color: var(--text);
+  font-family: var(--font);
+  font-size: 11px;
+  padding: 3px 5px;
+  outline: none;
+}
+.pc-select:focus, .pc-input:focus { border-color: var(--accent); }
+.pc-btns {
+  display: flex;
+  gap: 4px;
+  justify-content: flex-end;
+  margin-top: 6px;
+}
+.pc-btn {
+  background: transparent;
+  border: 1px solid var(--border2);
+  border-radius: var(--radius);
+  color: var(--muted);
+  font-family: var(--font);
+  font-size: 10px;
+  padding: 2px 8px;
+  cursor: pointer;
+}
+.pc-btn.ok { border-color: var(--accent); color: var(--accent); }
+.pc-btn:hover { color: var(--text); }
+
+/* ── scrollbar ────────────────────────────────────────────────────── */
+/* prevent double-tap zoom on all interactive elements */
+button, [data-pad], [data-slot] {
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+}
+
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--border2); border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: var(--muted); }
+
+/* ── patch browser ────────────────────────────────────────────────── */
+#patch-browser {
+  display: none;
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,0.6);
+  z-index: 200;
+  align-items: center;
+  justify-content: center;
+}
+#patch-browser.open { display: flex; }
+
+#patch-panel {
+  background: var(--surface);
+  border: 1px solid var(--border2);
+  border-radius: var(--radius);
+  width: min(480px, 92vw);
+  max-height: 70vh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+#patch-panel-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+
+#patch-panel-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--accent);
+  flex: 1;
+}
+
+#patch-search {
+  background: var(--surface2);
+  border: 1px solid var(--border2);
+  border-radius: var(--radius);
+  color: var(--text);
+  font-family: var(--font);
+  font-size: 11px;
+  padding: 3px 8px;
+  outline: none;
+  width: 140px;
+}
+#patch-search:focus { border-color: var(--accent); }
+
+#btn-patch-close {
+  background: transparent;
+  border: none;
+  color: var(--muted);
+  font-size: 14px;
+  cursor: pointer;
+  padding: 0 4px;
+  line-height: 1;
+}
+#btn-patch-close:hover { color: var(--text); }
+
+#patch-list {
+  overflow-y: auto;
+  flex: 1;
+}
+
+#patch-status {
+  padding: 12px;
+  font-size: 11px;
+  color: var(--muted);
+  text-align: center;
+}
+
+.patch-dir {
+  padding: 4px 12px 2px;
+  font-size: 10px;
+  color: var(--muted);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  border-top: 1px solid var(--border);
+  margin-top: 2px;
+}
+.patch-dir:first-child { border-top: none; margin-top: 0; }
+
+.patch-item {
+  display: block;
+  width: 100%;
+  text-align: left;
+  background: transparent;
+  border: none;
+  padding: 5px 12px 5px 20px;
+  font-family: var(--font);
+  font-size: 12px;
+  color: var(--text);
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.patch-item:hover { background: var(--surface2); color: var(--accent); }
+</style>
+</head>
+<body>
+
+<div id="app">
+
+  <!-- ── slot strip ─────────────────────────────────────────────── -->
+  <div id="slot-strip"></div>
+
+  <!-- ── main: notebook (left) + editor (right) ────────────────── -->
+  <div id="main">
+
+    <div id="left-panel">
+      <!-- notebook -->
+      <div id="notebook"></div>
+    </div>
+
+    <!-- drag divider (desktop only) -->
+    <div id="divider"></div>
+
+    <div id="right-panel">
+      <!-- input zone -->
+      <div id="input-zone">
+    <div id="input-header">
+      <span id="input-label">›</span>
+      <button id="btn-run">run  ⌃↵</button>
+      <button id="btn-clear">clear</button>
+      <button id="btn-patches">patches</button>
+      <button id="btn-save">save</button>
+      <button id="btn-load">load</button>
+      <input id="load-input" type="file" accept=".json" style="display:none">
+      <button id="btn-pad">pads</button>
+      <button id="btn-fix">fix</button>
+    </div>
+    <div id="input-toolbar">
+      <button id="btn-theme">retro</button>
+      <button id="btn-guide">guide</button>
+      <button id="btn-readme">readme</button>
+    </div>
+    <textarea id="editor"
+      xplaceholder="N: 4410&#10;T: !N&#10;W: w s +\(N#(440*(6.28318%44100)))"
+      placeholder="/ click patches and load dm-bell.ks&#10;/ then press run&#10;/ then click ->0&#10;/ then click pads&#10;/ then click melodic&#10;/ then play"
+      spellcheck="false"
+      autocorrect="off"
+      autocapitalize="off"
+    ></textarea>
+    <div id="input-footer">
+      <span id="input-hint">↑↓ history · ⌃↵ run · ⌃L clear</span>
+      <span id="wasm-status">loading wasm…</span>
+    </div>
+      </div><!-- /input-zone -->
+    </div><!-- /right-panel -->
+
+  </div><!-- /main -->
+
+</div><!-- /app -->
+
+<!-- ── patch browser ───────────────────────────────────────────── -->
+<div id="patch-browser">
+  <div id="patch-panel">
+    <div id="patch-panel-header">
+      <span id="patch-panel-title">patches · octetta/k-synth</span>
+      <input id="patch-search" type="search" placeholder="filter…" autocomplete="off" spellcheck="false">
+      <button id="btn-patch-close">✕</button>
+    </div>
+    <div id="patch-list">
+      <div id="patch-status">loading…</div>
+    </div>
+  </div>
+</div>
+
+<!-- ── pad overlay ──────────────────────────────────────────────── -->
+<div id="pad-overlay">
+  <div id="pad-panel">
+    <div id="pad-header">
+      <span id="pad-title">pads</span>
+      <button class="pad-preset-btn active" id="preset-drum">drum</button>
+      <button class="pad-preset-btn" id="preset-melodic">melodic</button>
+      <button id="btn-pad-close">✕</button>
+    </div>
+    <div id="pad-grid"></div>
+  </div>
+</div>
+
+<!-- ── slot context menu ────────────────────────────────────────── -->
+<div id="slot-menu">
+  <div class="slot-menu-item" id="smenu-play">▶ play</div>
+  <div class="slot-menu-item" id="smenu-dl">↓ download wav</div>
+  <div class="slot-menu-item" id="smenu-rename">rename</div>
+  <div class="slot-menu-item" id="smenu-rate">set base rate</div>
+  <div class="slot-menu-item danger" id="smenu-clear">clear slot</div>
+</div>
+
+<!-- ── pad config popup ─────────────────────────────────────────── -->
+<div id="pad-config">
+  <div class="pc-row">
+    <span class="pc-label">slot</span>
+    <select id="pc-slot" class="pc-select"></select>
+  </div>
+  <div class="pc-row">
+    <span class="pc-label">pitch</span>
+    <input id="pc-rate" class="pc-input" type="number" min="-24" max="24" value="0">
+    <span style="font-size:10px;color:var(--muted)">st</span>
+  </div>
+  <div class="pc-btns">
+    <button class="pc-btn" id="pc-cancel">cancel</button>
+    <button class="pc-btn ok" id="pc-ok">ok</button>
+  </div>
+</div>
+
+<!-- ── Emscripten glue ───────────────────────────────────────────── -->
+<script src="ksynth.js"></script>
+
+<script>
+'use strict';
+
+/* ═══════════════════════════════════════════════════════════════════
+   STATE
+   ═══════════════════════════════════════════════════════════════════ */
+
+const NUM_SLOTS = 16;
+const NUM_PADS  = 16;
+const SR        = 44100;
+
+// 16 sample slots: { buffer: AudioBuffer|null, label: string, baseRate: float }
+const slots = Array.from({length: NUM_SLOTS}, (_, i) => ({
+  buffer:   null,
+  label:    `${i.toString(16).toUpperCase()}`,
+  baseRate: 1.0,
+}));
+
+// 16 pad assignments: { slot: int, semitones: int }
+// semitones is the BUTTON's pitch offset; slot.baseRate is the slot's base
+const pads = Array.from({length: NUM_PADS}, (_, i) => ({
+  slot:      i,      // drum default: pad N → slot N
+  semitones: 0,
+}));
+
+// REPL history
+const history  = [];   // array of { code, success, samples, error, floatData }
+let histIdx    = -1;   // current history navigation position
+let lastResult = null; // Float32Array of last successful run
+
+// Wasm handles
+let KS        = null;
+let ks_run    = null;
+let ks_buf    = null;
+let ks_len    = null;
+let ks_err    = null;
+
+// AudioContext (lazy init on first user gesture)
+let audioCtx  = null;
+let limiter   = null;
+
+// Active slot for context menu
+let menuSlot  = -1;
+// Active pad for config popup
+let configPad = -1;
+
+/* ═══════════════════════════════════════════════════════════════════
+   WASM INIT
+   ═══════════════════════════════════════════════════════════════════ */
+
+async function initWasm() {
+  const statusEl = document.getElementById('wasm-status');
+  try {
+    KS = await KSynth();
+    KS.ccall('ks_init', null, [], []);
+
+    ks_run = KS.cwrap('ks_run',        'number', ['string']);
+    ks_buf = KS.cwrap('ks_get_buffer', 'number', []);
+    ks_len = KS.cwrap('ks_get_length', 'number', []);
+    ks_err = KS.cwrap('ks_get_error',  'string', []);
+
+    statusEl.textContent = 'wasm ready';
+    statusEl.className = 'ready';
+    document.getElementById('btn-run').disabled = false;
+  } catch(e) {
+    statusEl.textContent = 'wasm failed: ' + e.message;
+    statusEl.className = 'error';
+    console.error('Wasm init failed:', e);
+  }
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+   AUDIO
+   ═══════════════════════════════════════════════════════════════════ */
+
+function ensureAudio() {
+  if (!audioCtx) {
+    audioCtx = new AudioContext({sampleRate: SR});
+    // master gain + limiter chain
+    // gain at 0.25 gives 4 simultaneous full-scale voices without clipping
+    // compressor catches any remaining peaks before they hit the DAC
+    const masterGain = audioCtx.createGain();
+    masterGain.gain.value = 0.25;
+
+    limiter = audioCtx.createDynamicsCompressor();
+    limiter.threshold.value = -6;    // start limiting at -6 dBFS
+    limiter.knee.value      =  2;
+    limiter.ratio.value     = 20;
+    limiter.attack.value    = 0.0003; // 0.3ms — catches transients
+    limiter.release.value   = 0.1;
+
+    masterGain.connect(limiter);
+    limiter.connect(audioCtx.destination);
+
+    // reroute: sources → masterGain → limiter → destination
+    limiter._input = masterGain;
+  }
+  if (audioCtx.state === 'suspended') audioCtx.resume();
+}
+
+// Assuming 'audioCtx' is your existing AudioContext
+async function reconnectAudio() {
+  try {
+    if (audioCtx.state === 'suspended' || audioCtx.state === 'interrupted') {
+      await audioCtx.resume();
+    } else if (audioCtx.state === 'running') {
+      // If it thinks it's running but silent, cycle it
+      await audioCtx.suspend();
+      await audioCtx.resume();
+    }
+    console.log("Audio state is now:", audioCtx.state);
+  } catch (e) {
+    console.error("Failed to reconnect audio:", e);
+  }
+}
+
+function floatArrayToAudioBuffer(f32) {
+  ensureAudio();
+  const buf = audioCtx.createBuffer(1, f32.length, SR);
+  buf.copyToChannel(f32, 0);
+  return buf;
+}
+
+function playSlot(slotIdx, extraSemitones = 0) {
+  const s = slots[slotIdx];
+  if (!s.buffer) return;
+  ensureAudio();
+  const src = audioCtx.createBufferSource();
+  src.buffer = s.buffer;
+  const totalSt = extraSemitones;  // slot.baseRate already baked in
+  src.playbackRate.value = s.baseRate * Math.pow(2, totalSt / 12);
+  src.connect(limiter._input);
+  src.start();
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+   KSYNTH EVAL
+   ═══════════════════════════════════════════════════════════════════ */
+
+function evalScript(code) {
+  if (!KS) return { success: false, error: 'wasm not loaded', samples: 0, floatData: null };
+
+  const n = ks_run(code);
+  if (n < 0) {
+    return { success: false, error: ks_err(), samples: 0, floatData: null };
+  }
+
+  const ptr = ks_buf();
+  const len = ks_len();
+  // Copy out of Wasm heap immediately
+  const f32 = new Float32Array(KS.HEAPF32.buffer, ptr, len).slice();
+  return { success: true, samples: len, floatData: f32, error: '' };
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+   WAVEFORM DRAWING
+   ═══════════════════════════════════════════════════════════════════ */
+
+function drawWave(canvas, f32) {
+  const ctx = canvas.getContext('2d');
+  const W = canvas.width;
+  const H = canvas.height;
+  ctx.clearRect(0, 0, W, H);
+
+  if (!f32 || f32.length === 0) return;
+
+  const step   = f32.length / W;
+  const mid    = H / 2;
+  const amp    = mid * 0.85;
+
+  ctx.strokeStyle = getComputedStyle(document.documentElement)
+                      .getPropertyValue('--accent').trim();
+  ctx.lineWidth   = 1;
+  ctx.beginPath();
+
+  for (let x = 0; x < W; x++) {
+    const i   = Math.floor(x * step);
+    const v   = f32[i] * amp;
+    const y   = mid - v;
+    if (x === 0) ctx.moveTo(x + 0.5, y);
+    else          ctx.lineTo(x + 0.5, y);
+  }
+  ctx.stroke();
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+   SLOT MANAGEMENT
+   ═══════════════════════════════════════════════════════════════════ */
+
+function bankToSlot(slotIdx, f32, codeFirstLine) {
+  const s = slots[slotIdx];
+  s._f32   = f32;
+  s.buffer = floatArrayToAudioBuffer(f32);
+  // derive label from first non-comment line
+  const firstLine = codeFirstLine.replace(/^\/.*/, '').trim()
+                        .split('\n').find(l => l.trim() && !l.trim().startsWith('/'))
+                    || `slot${slotIdx}`;
+  s.label = firstLine.slice(0, 12);
+  renderSlotStrip();
+  renderPadGrid();
+}
+
+function clearSlot(slotIdx) {
+  slots[slotIdx].buffer   = null;
+  slots[slotIdx]._f32     = null;
+  slots[slotIdx].baseRate = 1.0;
+  renderSlotStrip();
+  renderPadGrid();
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+   LONG-PRESS UTILITY
+   ═══════════════════════════════════════════════════════════════════ */
+
+// Attach a long-press handler (500ms) to an element.
+// Uses touchstart/touchend for iOS reliability; contextmenu for desktop.
+// onLongPressPointer — for elements already using pointerdown for play.
+// Uses pointer events only (no touchstart), so it doesn't conflict.
+// Long-press = hold 500ms without moving. Right-click also triggers.
+function onLongPressPointer(el, onLong) {
+  let timer  = null;
+  let startX = 0;
+  let startY = 0;
+
+  el.addEventListener('pointerdown', e => {
+    startX = e.clientX; startY = e.clientY;
+    timer = setTimeout(() => {
+      timer = null;
+      onLong();
+    }, 500);
+  });
+  el.addEventListener('pointermove', e => {
+    if (!timer) return;
+    if (Math.abs(e.clientX - startX) > 10 || Math.abs(e.clientY - startY) > 10) {
+      clearTimeout(timer); timer = null;
+    }
+  });
+  const cancel = () => { clearTimeout(timer); timer = null; };
+  el.addEventListener('pointerup',    cancel);
+  el.addEventListener('pointercancel',cancel);
+  el.addEventListener('contextmenu', e => { e.preventDefault(); cancel(); onLong(); });
+}
+
+// onLongPress(el, onLong, onTap)
+// onLong(x, y) — fired after 500ms hold
+// onTap()      — fired on quick release (optional); used on iOS where
+//                preventDefault on touchstart suppresses synthetic click
+function onLongPress(el, onLong, onTap) {
+  let timer  = null;
+  let fired  = false;
+  let startX = 0;
+  let startY = 0;
+
+  function getXY(e) {
+    if (e.touches && e.touches[0]) return { x: e.touches[0].clientX, y: e.touches[0].clientY };
+    const r = el.getBoundingClientRect();
+    return { x: e.clientX ?? r.left + r.width / 2, y: e.clientY ?? r.top + r.height / 2 };
+  }
+
+  function start(e) {
+    fired = false;
+    const { x, y } = getXY(e);
+    startX = x; startY = y;
+    // preventDefault stops iOS text-selection callout on long-press,
+    // but also suppresses the synthetic click — we handle tap manually in end()
+    e.preventDefault();
+    timer = setTimeout(() => {
+      fired = true;
+      onLong(startX, startY, e);
+    }, 500);
+  }
+
+  function cancel() {
+    clearTimeout(timer);
+    timer = null;
+  }
+
+  function move(e) {
+    if (!timer) return;
+    const { x, y } = getXY(e);
+    if (Math.abs(x - startX) > 10 || Math.abs(y - startY) > 10) cancel();
+  }
+
+  function end(e) {
+    if (fired) {
+      e.preventDefault(); // suppress synthetic click after long-press
+    } else if (timer) {
+      // quick release = tap; synthetic click is suppressed so fire manually
+      cancel();
+      if (onTap) onTap();
+    }
+  }
+
+  el.addEventListener('touchstart',  start,  { passive: false });
+  el.addEventListener('touchmove',   move,   { passive: true  });
+  el.addEventListener('touchend',    end,    { passive: false });
+  el.addEventListener('touchcancel', cancel, { passive: true  });
+  // desktop right-click still works; click handles desktop tap
+  el.addEventListener('contextmenu', e => {
+    e.preventDefault();
+    const { x, y } = getXY(e);
+    onLong(x, y, e);
+  });
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+   SLOT STRIP RENDER
+   ═══════════════════════════════════════════════════════════════════ */
+
+function renderSlotStrip() {
+  const strip = document.getElementById('slot-strip');
+  strip.innerHTML = '';
+
+  for (let i = 0; i < NUM_SLOTS; i++) {
+    const s   = slots[i];
+    const hex = i.toString(16).toUpperCase();
+
+    const card = document.createElement('div');
+    card.className = 'slot-card' + (s.buffer ? ' filled' : '');
+    card.dataset.slot = i;
+
+    // index
+    const idx = document.createElement('div');
+    idx.className = 'slot-idx';
+    idx.textContent = hex;
+    card.appendChild(idx);
+
+    if (s.buffer) {
+      // label
+      const lbl = document.createElement('div');
+      lbl.className = 'slot-label';
+      lbl.textContent = s.label;
+      card.appendChild(lbl);
+
+      // waveform canvas
+      const cv = document.createElement('canvas');
+      cv.className = 'slot-wave';
+      cv.width  = 62;
+      cv.height = 20;
+      card.appendChild(cv);
+
+      // rate
+      const rt = document.createElement('div');
+      rt.className = 'slot-rate';
+      const st = Math.round(Math.log2(s.baseRate) * 12);
+      rt.textContent = (st >= 0 ? '+' : '') + st + 'st';
+      card.appendChild(rt);
+
+      // draw waveform — need the float data; store on slot
+      if (s._f32) drawWave(cv, s._f32);
+
+      // desktop click → play
+      card.addEventListener('click', e => {
+        if (e.button === 0) playSlot(i);
+      });
+
+      // iOS: fire play immediately on touchstart — no 500ms wait
+      let _touchMoved = false;
+      card.addEventListener('touchstart', e => {
+        e.preventDefault(); // stop iOS callout + synthetic click
+        _touchMoved = false;
+        playSlot(i);
+      }, { passive: false });
+      card.addEventListener('touchmove', () => { _touchMoved = true; }, { passive: true });
+
+      // right-click (desktop) → context menu
+      card.addEventListener('contextmenu', e => {
+        e.preventDefault();
+        showSlotMenu(i, e.clientX, e.clientY);
+      });
+
+    } else {
+      const hint = document.createElement('div');
+      hint.className = 'slot-empty-hint';
+      hint.textContent = '—';
+      card.appendChild(hint);
+    }
+
+    strip.appendChild(card);
+  }
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+   SLOT CONTEXT MENU
+   ═══════════════════════════════════════════════════════════════════ */
+
+function showSlotMenu(slotIdx, x, y) {
+  menuSlot = slotIdx;
+  const menu = document.getElementById('slot-menu');
+  menu.style.left = x + 'px';
+  menu.style.top  = y + 'px';
+  menu.classList.add('open');
+}
+
+function hideSlotMenu() {
+  document.getElementById('slot-menu').classList.remove('open');
+  menuSlot = -1;
+}
+
+document.getElementById('smenu-play').addEventListener('click', () => {
+  if (menuSlot >= 0) playSlot(menuSlot);
+  hideSlotMenu();
+});
+
+document.getElementById('smenu-dl').addEventListener('click', () => {
+  const s = slots[menuSlot];
+  if (s._f32) {
+    const name = (s.label || `slot${menuSlot}`).replace(/[^a-z0-9_-]/gi, '_');
+    downloadWav(s._f32, `${name}.wav`);
+  }
+  hideSlotMenu();
+});
+
+document.getElementById('smenu-rename').addEventListener('click', () => {
+  if (menuSlot < 0) return;
+  const name = prompt('Slot label:', slots[menuSlot].label);
+  if (name !== null) {
+    slots[menuSlot].label = name.slice(0, 16);
+    renderSlotStrip();
+  }
+  hideSlotMenu();
+});
+
+document.getElementById('smenu-rate').addEventListener('click', () => {
+  if (menuSlot < 0) return;
+  const st = Math.round(Math.log2(slots[menuSlot].baseRate) * 12);
+  const val = prompt('Base rate (semitones, ±24):', st);
+  if (val !== null) {
+    const n = parseInt(val, 10);
+    if (!isNaN(n)) slots[menuSlot].baseRate = Math.pow(2, n / 12);
+  }
+  renderSlotStrip();
+  hideSlotMenu();
+});
+
+document.getElementById('smenu-clear').addEventListener('click', () => {
+  if (menuSlot >= 0) clearSlot(menuSlot);
+  hideSlotMenu();
+});
+
+document.addEventListener('click', e => {
+  if (!e.target.closest('#slot-menu') && !e.target.closest('.slot-card')) {
+    hideSlotMenu();
+  }
+});
+
+/* ═══════════════════════════════════════════════════════════════════
+   NOTEBOOK RENDER
+   ═══════════════════════════════════════════════════════════════════ */
+
+function addNotebookCell(entry) {
+  const nb   = document.getElementById('notebook');
+  const cell = document.createElement('div');
+  cell.className = 'nb-cell' + (entry.success ? '' : ' error-cell');
+
+  // header
+  const hdr = document.createElement('div');
+  hdr.className = 'nb-cell-header';
+
+  const status = document.createElement('span');
+  status.className = 'nb-status ' + (entry.success ? 'ok' : 'err');
+  status.textContent = entry.success ? '✓' : '✗';
+  hdr.appendChild(status);
+
+  const meta = document.createElement('span');
+  meta.className = 'nb-meta';
+  meta.textContent = entry.success
+    ? `${entry.samples} samples  ${(entry.samples / SR * 1000).toFixed(1)}ms`
+    : entry.error;
+  hdr.appendChild(meta);
+
+  // download button (success only)
+  if (entry.success && entry.floatData) {
+    const dl = document.createElement('button');
+    dl.className = 'nb-dl-btn';
+    dl.textContent = '↓ wav';
+    dl.title = 'download as WAV';
+    dl.addEventListener('click', e => {
+      e.stopPropagation();
+      const ts   = new Date().toISOString().slice(0,19).replace(/[T:]/g, '-');
+      const name = `ksynth-${ts}`;
+      downloadWav(entry.floatData, `${name}.wav`);
+    });
+    hdr.appendChild(dl);
+  }
+
+  // delete button
+  const del = document.createElement('button');
+  del.className = 'nb-del-btn';
+  del.textContent = '✕';
+  del.title = 'remove cell';
+  del.addEventListener('click', () => cell.remove());
+  hdr.appendChild(del);
+
+  cell.appendChild(hdr);
+
+  // code — click to copy back to editor
+  const code = document.createElement('div');
+  code.className = 'nb-code';
+  code.textContent = entry.code;
+  code.title = 'click to copy to editor';
+  code.style.cursor = 'pointer';
+  code.addEventListener('click', () => {
+    const editor = document.getElementById('editor');
+    editor.value = entry.code;
+    editor.focus();
+    // flash the code div briefly
+    code.style.color = 'var(--accent)';
+    setTimeout(() => { code.style.color = ''; }, 200);
+    // reset history navigation
+    histIdx = -1;
+  });
+  cell.appendChild(code);
+
+  // waveform + bank row (success only)
+  if (entry.success && entry.floatData) {
+    const wrapDiv = document.createElement('div');
+    wrapDiv.className = 'nb-wave-wrap';
+
+    const cv = document.createElement('canvas');
+    cv.className = 'nb-wave';
+    cv.width  = 600;
+    cv.height = 40;
+    cv.title  = 'click to play';
+    cv.style.cursor = 'pointer';
+    wrapDiv.appendChild(cv);
+    cell.appendChild(wrapDiv);
+
+    // draw after insert so we have layout width
+    requestAnimationFrame(() => {
+      cv.width = cv.offsetWidth || 600;
+      drawWave(cv, entry.floatData);
+    });
+
+    // click → play directly from floatData, no slot required
+    cv.addEventListener('click', () => {
+      ensureAudio();
+      const abuf = floatArrayToAudioBuffer(entry.floatData);
+      const src  = audioCtx.createBufferSource();
+      src.buffer = abuf;
+      src.connect(limiter._input);
+      src.start();
+      // brief green tint flash then redraw
+      const c2d = cv.getContext('2d');
+      c2d.fillStyle = 'rgba(63,185,80,0.15)';
+      c2d.fillRect(0, 0, cv.width, cv.height);
+      setTimeout(() => drawWave(cv, entry.floatData), 120);
+    });
+
+    // bank buttons
+    const bankRow = document.createElement('div');
+    bankRow.className = 'nb-bank-row';
+
+    for (let i = 0; i < NUM_SLOTS; i++) {
+      const btn = document.createElement('button');
+      btn.className = 'nb-bank-btn';
+      btn.textContent = '→' + i.toString(16).toUpperCase();
+      btn.title = `Bank to slot ${i}`;
+      btn.addEventListener('click', () => {
+        // store f32 on slot for waveform redraw
+        slots[i]._f32 = entry.floatData;
+        bankToSlot(i, entry.floatData, entry.code);
+      });
+      bankRow.appendChild(btn);
+    }
+    cell.appendChild(bankRow);
+  }
+
+  nb.appendChild(cell);
+  // scroll new cell into view
+  cell.scrollIntoView({ behavior: 'smooth', block: 'end' });
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+   REPL / EDITOR
+   ═══════════════════════════════════════════════════════════════════ */
+
+const editor = document.getElementById('editor');
+
+function runEditor() {
+  const code = editor.value.trim();
+  if (!code) return;
+
+  ensureAudio();
+  const result = evalScript(code);
+  const entry  = { code, ...result };
+
+  history.unshift(entry);  // prepend so index 0 = most recent
+  histIdx = -1;
+
+  if (result.success) lastResult = result.floatData;
+
+  addNotebookCell(entry);
+}
+
+// History navigation
+editor.addEventListener('keydown', e => {
+  const lines = editor.value.split('\n');
+  const atFirstLine = editor.selectionStart <= lines[0].length;
+  const atLastLine  = editor.selectionEnd >=
+    editor.value.length - lines[lines.length - 1].length;
+
+  if (e.key === 'ArrowUp' && atFirstLine && !e.shiftKey) {
+    if (history.length === 0) return;
+    e.preventDefault();
+    histIdx = Math.min(histIdx + 1, history.length - 1);
+    editor.value = history[histIdx].code;
+    editor.selectionStart = editor.selectionEnd = 0;
+    return;
+  }
+
+  if (e.key === 'ArrowDown' && atLastLine && !e.shiftKey) {
+    e.preventDefault();
+    if (histIdx <= 0) {
+      histIdx = -1;
+      editor.value = '';
+    } else {
+      histIdx--;
+      editor.value = history[histIdx].code;
+    }
+    const len = editor.value.length;
+    editor.selectionStart = editor.selectionEnd = len;
+    return;
+  }
+
+  // Ctrl+Enter or Cmd+Enter → run
+  if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
+    e.preventDefault();
+    runEditor();
+    return;
+  }
+
+  // Ctrl+L → clear notebook
+  if ((e.ctrlKey || e.metaKey) && e.key === 'l') {
+    e.preventDefault();
+    document.getElementById('editor').value = '';
+    return;
+  }
+});
+
+document.getElementById('btn-run').addEventListener('click', runEditor);
+document.getElementById('btn-clear').addEventListener('click', () => {
+  document.getElementById('editor').value = '';
+  document.getElementById('editor').focus();
+});
+
+/* ═══════════════════════════════════════════════════════════════════
+   PAD GRID
+   ═══════════════════════════════════════════════════════════════════ */
+
+function renderPadGrid() {
+  const grid = document.getElementById('pad-grid');
+  grid.innerHTML = '';
+
+  for (let i = 0; i < NUM_PADS; i++) {
+    const pd  = pads[i];
+    const s   = slots[pd.slot];
+    const hex = i.toString(16).toUpperCase();
+
+    const btn = document.createElement('div');
+    btn.className = 'pad-button' + (s.buffer ? ' filled' : '');
+    btn.dataset.pad = i;
+
+    const slotLbl = document.createElement('div');
+    slotLbl.className = 'pad-btn-slot';
+    slotLbl.textContent = pd.slot.toString(16).toUpperCase();
+    btn.appendChild(slotLbl);
+
+    // keyboard shortcut hint: pads 0-8 → keys 1-9, pad 9 → 0, pads 10-15 → a-f
+    const keyHint = document.createElement('div');
+    keyHint.className = 'pad-btn-key';
+    if (i < 9)       keyHint.textContent = (i + 1).toString();
+    else if (i === 9) keyHint.textContent = '0';
+    else              keyHint.textContent = String.fromCharCode('a'.charCodeAt(0) + i - 10);
+    btn.appendChild(keyHint);
+
+    if (s.buffer) {
+      const lbl = document.createElement('div');
+      lbl.className = 'pad-btn-label';
+      lbl.textContent = s.label;
+      btn.appendChild(lbl);
+
+      const rate = document.createElement('div');
+      rate.className = 'pad-btn-rate';
+      const st = pd.semitones;
+      rate.textContent = (st >= 0 ? '+' : '') + st + 'st';
+      btn.appendChild(rate);
+    } else {
+      const empty = document.createElement('div');
+      empty.className = 'pad-btn-empty';
+      empty.textContent = '—';
+      btn.appendChild(empty);
+    }
+
+    // play on click
+    btn.addEventListener('pointerdown', e => {
+      e.preventDefault();
+      if (!s.buffer) return;
+      ensureAudio();
+      // flash
+      btn.classList.add('playing');
+      setTimeout(() => btn.classList.remove('playing'), 120);
+      // play: slot baseRate * button semitones
+      playSlot(pd.slot, pd.semitones);
+    });
+
+    // right-click or long-press → pad config (pointer-based, no conflict with pointerdown play)
+    onLongPressPointer(btn, () => showPadConfig(i, btn.getBoundingClientRect()));
+
+    grid.appendChild(btn);
+  }
+}
+
+/* ── pad presets ────────────────────────────────────────────────── */
+
+function applyDrumPreset() {
+  for (let i = 0; i < NUM_PADS; i++) {
+    pads[i].slot      = i;
+    pads[i].semitones = 0;
+  }
+  document.getElementById('preset-drum').classList.add('active');
+  document.getElementById('preset-melodic').classList.remove('active');
+  renderPadGrid();
+}
+
+function applyMelodicPreset() {
+  // All pads → slot 0, chromatic layout
+  // Row 3 (bottom, indices 12-15): 0, -2, -4, -7
+  // Row 2 (indices 8-11):          +1, +2, +3, +4
+  // Row 1 (indices 4-7):           +5, +6, +7, +8
+  // Row 0 (top, indices 0-3):      +9,+10,+11,+12
+  const semitones = [
+    9, 10, 11, 12,
+    5,  6,  7,  8,
+    1,  2,  3,  4,
+    0, -2, -4, -7,
+  ];
+  for (let i = 0; i < NUM_PADS; i++) {
+    pads[i].slot      = 0;
+    pads[i].semitones = semitones[i];
+  }
+  document.getElementById('preset-melodic').classList.add('active');
+  document.getElementById('preset-drum').classList.remove('active');
+  renderPadGrid();
+}
+
+document.getElementById('preset-drum').addEventListener('click', applyDrumPreset);
+document.getElementById('preset-melodic').addEventListener('click', applyMelodicPreset);
+
+/* ── pad open/close ─────────────────────────────────────────────── */
+
+const padOverlay = document.getElementById('pad-overlay');
+
+document.getElementById('btn-pad').addEventListener('click', () => {
+  const open = padOverlay.classList.toggle('open');
+  document.getElementById('btn-pad').classList.toggle('active', open);
+  if (open) renderPadGrid();
+});
+
+document.getElementById('btn-pad-close').addEventListener('click', () => {
+  padOverlay.classList.remove('open');
+  document.getElementById('btn-pad').classList.remove('active');
+});
+
+padOverlay.addEventListener('click', e => {
+  if (e.target === padOverlay) {
+    padOverlay.classList.remove('open');
+    document.getElementById('btn-pad').classList.remove('active');
+  }
+});
+
+/* ── pad config popup ───────────────────────────────────────────── */
+
+function showPadConfig(padIdx, rect) {
+  configPad = padIdx;
+  const popup = document.getElementById('pad-config');
+
+  // populate slot selector
+  const sel = document.getElementById('pc-slot');
+  sel.innerHTML = '';
+  for (let i = 0; i < NUM_SLOTS; i++) {
+    const opt = document.createElement('option');
+    opt.value = i;
+    opt.textContent = i.toString(16).toUpperCase() +
+      (slots[i].buffer ? ' · ' + slots[i].label : ' · empty');
+    sel.appendChild(opt);
+  }
+  sel.value = pads[padIdx].slot;
+
+  document.getElementById('pc-rate').value = pads[padIdx].semitones;
+
+  // position near the pad button
+  popup.style.left = Math.min(rect.left, window.innerWidth - 220) + 'px';
+  popup.style.top  = (rect.bottom + 4) + 'px';
+  popup.classList.add('open');
+}
+
+document.getElementById('pc-ok').addEventListener('click', () => {
+  if (configPad < 0) return;
+  pads[configPad].slot      = parseInt(document.getElementById('pc-slot').value, 10);
+  pads[configPad].semitones = parseInt(document.getElementById('pc-rate').value, 10) || 0;
+  document.getElementById('pad-config').classList.remove('open');
+  configPad = -1;
+  renderPadGrid();
+});
+
+document.getElementById('pc-cancel').addEventListener('click', () => {
+  document.getElementById('pad-config').classList.remove('open');
+  configPad = -1;
+});
+
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape') {
+    document.getElementById('pad-config').classList.remove('open');
+    hideSlotMenu();
+    configPad = -1;
+  }
+});
+
+/* ═══════════════════════════════════════════════════════════════════
+   KEYBOARD SHORTCUTS — global
+   ═══════════════════════════════════════════════════════════════════ */
+
+document.addEventListener('keydown', e => {
+  // 1-9, 0 → pads 0-9; a-f → pads 10-15 (hex, matching slot labels)
+  if (padOverlay.classList.contains('open') &&
+      document.activeElement !== editor) {
+    const k = e.key.toLowerCase();
+    let n = -1;
+    if (k === '0') n = 9;
+    else if (k >= '1' && k <= '9') n = parseInt(k, 10) - 1;
+    else if (k >= 'a' && k <= 'f') n = 10 + (k.charCodeAt(0) - 'a'.charCodeAt(0));
+    if (n >= 0 && n < 16) {
+      const pd = pads[n];
+      if (slots[pd.slot].buffer) {
+        playSlot(pd.slot, pd.semitones);
+        const btn = document.querySelector(`[data-pad="${n}"]`);
+        if (btn) {
+          btn.classList.add('playing');
+          setTimeout(() => btn.classList.remove('playing'), 120);
+        }
+      }
+    }
+  }
+});
+
+/* ═══════════════════════════════════════════════════════════════════
+   THEME
+   ═══════════════════════════════════════════════════════════════════ */
+
+(function () {
+  const THEMES = ['retro', 'dark', 'light'];
+  const LABELS = { retro: 'retro', dark: 'dark', light: 'light' };
+  const btn    = document.getElementById('btn-theme');
+
+  function applyTheme(t) {
+    document.documentElement.setAttribute('data-theme', t);
+    btn.textContent = LABELS[t];
+    localStorage.setItem('ks-theme', t);
+  }
+
+  // restore saved theme
+  const saved = localStorage.getItem('ks-theme');
+  applyTheme(THEMES.includes(saved) ? saved : 'retro');
+
+  btn.addEventListener('click', () => {
+    const cur  = document.documentElement.getAttribute('data-theme') || 'retro';
+    const next = THEMES[(THEMES.indexOf(cur) + 1) % THEMES.length];
+    applyTheme(next);
+  });
+}());
+
+/* ═══════════════════════════════════════════════════════════════════
+   DOCS
+   ═══════════════════════════════════════════════════════════════════ */
+
+(function () {
+  document.getElementById('btn-guide').addEventListener('click', () => {
+    window.open('guide.html', '_blank');
+  });
+  document.getElementById('btn-readme').addEventListener('click', () => {
+    window.open('readme.html', '_blank');
+  });
+}());
+
+/* ═══════════════════════════════════════════════════════════════════
+   WAV EXPORT
+   ═══════════════════════════════════════════════════════════════════ */
+
+function downloadWav(f32, filename) {
+  // build a minimal 16-bit PCM WAV in memory
+  const numSamples = f32.length;
+  const numChannels = 1;
+  const bitsPerSample = 16;
+  const byteRate = SR * numChannels * bitsPerSample / 8;
+  const blockAlign = numChannels * bitsPerSample / 8;
+  const dataSize = numSamples * blockAlign;
+  const buffer = new ArrayBuffer(44 + dataSize);
+  const view = new DataView(buffer);
+
+  function writeStr(off, s) {
+    for (let i = 0; i < s.length; i++) view.setUint8(off + i, s.charCodeAt(i));
+  }
+  writeStr(0,  'RIFF');
+  view.setUint32(4,  36 + dataSize, true);
+  writeStr(8,  'WAVE');
+  writeStr(12, 'fmt ');
+  view.setUint32(16, 16, true);           // PCM chunk size
+  view.setUint16(20, 1,  true);           // PCM format
+  view.setUint16(22, numChannels, true);
+  view.setUint32(24, SR, true);
+  view.setUint32(28, byteRate, true);
+  view.setUint16(32, blockAlign, true);
+  view.setUint16(34, bitsPerSample, true);
+  writeStr(36, 'data');
+  view.setUint32(40, dataSize, true);
+
+  // convert float32 → int16
+  let off = 44;
+  for (let i = 0; i < numSamples; i++) {
+    const s = Math.max(-1, Math.min(1, f32[i]));
+    view.setInt16(off, s < 0 ? s * 0x8000 : s * 0x7FFF, true);
+    off += 2;
+  }
+
+  const blob = new Blob([buffer], { type: 'audio/wav' });
+  const url  = URL.createObjectURL(blob);
+  const a    = document.createElement('a');
+  a.href     = url;
+  a.download = filename;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+   SAVE / LOAD
+   ═══════════════════════════════════════════════════════════════════ */
+
+(function () {
+  const MAGIC   = 'ksynth-session-v1';
+
+  // Float32Array → base64 string
+  function f32ToB64(f32) {
+    const bytes = new Uint8Array(f32.buffer);
+    let bin = '';
+    for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
+    return btoa(bin);
+  }
+
+  // base64 string → Float32Array
+  function b64ToF32(b64) {
+    const bin   = atob(b64);
+    const bytes = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+    return new Float32Array(bytes.buffer);
+  }
+
+  function saveSession() {
+    const session = {
+      magic: MAGIC,
+      saved: new Date().toISOString(),
+      slots: slots.map(s => ({
+        label:    s.label,
+        baseRate: s.baseRate,
+        audio:    s._f32 ? f32ToB64(s._f32) : null,
+      })),
+      pads: pads.map(p => ({ slot: p.slot, semitones: p.semitones })),
+      // save full history entries including audio so notebook rebuilds completely
+      history: history.slice().reverse().map(h => ({
+        code:     h.code,
+        success:  h.success,
+        samples:  h.samples,
+        error:    h.error,
+        audio:    h.floatData ? f32ToB64(h.floatData) : null,
+      })),
+    };
+
+    const json = JSON.stringify(session);
+    const blob = new Blob([json], { type: 'application/json' });
+    const url  = URL.createObjectURL(blob);
+    const a    = document.createElement('a');
+    const ts   = new Date().toISOString().slice(0,19).replace(/[T:]/g, '-');
+    a.href     = url;
+    a.download = `ksynth-${ts}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+  }
+
+  async function loadSession(file) {
+    let session;
+    try {
+      session = JSON.parse(await file.text());
+    } catch(e) {
+      alert('Could not parse file: ' + e.message);
+      return;
+    }
+    if (session.magic !== MAGIC) {
+      alert('Not a ksynth session file.');
+      return;
+    }
+
+    ensureAudio();
+
+    // restore slots
+    session.slots.forEach((sd, i) => {
+      slots[i].label    = sd.label;
+      slots[i].baseRate = sd.baseRate ?? 1.0;
+      if (sd.audio) {
+        const f32 = b64ToF32(sd.audio);
+        slots[i]._f32   = f32;
+        slots[i].buffer = floatArrayToAudioBuffer(f32);
+      } else {
+        slots[i]._f32   = null;
+        slots[i].buffer = null;
+      }
+    });
+
+    // restore pads
+    session.pads.forEach((pd, i) => {
+      pads[i].slot      = pd.slot;
+      pads[i].semitones = pd.semitones;
+    });
+
+    // restore history and rebuild notebook
+    history.length = 0;
+    document.getElementById('notebook').innerHTML = '';
+    histIdx = -1;
+
+    (session.history || []).forEach(hd => {
+      const f32   = hd.audio ? b64ToF32(hd.audio) : null;
+      const entry = {
+        code:      hd.code,
+        success:   hd.success,
+        samples:   hd.samples,
+        error:     hd.error,
+        floatData: f32,
+      };
+      history.unshift(entry);   // unshift keeps most-recent at index 0
+      addNotebookCell(entry);
+    });
+
+    renderSlotStrip();
+    renderPadGrid();
+  }
+
+  document.getElementById('btn-save').addEventListener('click', saveSession);
+
+  document.getElementById('btn-load').addEventListener('click', () => {
+    document.getElementById('load-input').click();
+  });
+
+  document.getElementById('load-input').addEventListener('change', e => {
+    const file = e.target.files[0];
+    if (file) loadSession(file);
+    e.target.value = ''; // reset so same file can be reloaded
+  });
+}());
+
+/* ═══════════════════════════════════════════════════════════════════
+   PATCH BROWSER
+   ═══════════════════════════════════════════════════════════════════ */
+
+(function () {
+  const REPO    = 'octetta/k-synth';
+  const API     = `https://api.github.com/repos/${REPO}`;
+  const RAW     = `https://raw.githubusercontent.com/${REPO}/HEAD`;
+
+  const browser  = document.getElementById('patch-browser');
+  const list     = document.getElementById('patch-list');
+  const status   = document.getElementById('patch-status');
+  const search   = document.getElementById('patch-search');
+  const btnOpen  = document.getElementById('btn-patches');
+  const btnClose = document.getElementById('btn-patch-close');
+  const btnFix   = document.getElementById('btn-fix');
+
+  let allPatches = []; // [{path, name, dir}]
+  let loaded     = false;
+
+  function open() {
+    browser.classList.add('open');
+    search.value = '';
+    search.focus();
+    if (!loaded) fetchPatches();
+    else render('');
+  }
+
+  function close() {
+    browser.classList.remove('open');
+    editor.focus();
+  }
+
+  async function fetchPatches() {
+    status.textContent = 'fetching patch list…';
+    list.innerHTML = '';
+    list.appendChild(status);
+    try {
+      const res  = await fetch(`${API}/git/trees/HEAD?recursive=1`);
+      if (!res.ok) throw new Error(`GitHub API ${res.status}`);
+      const data = await res.json();
+      allPatches = data.tree
+        .filter(f => f.type === 'blob' && f.path.endsWith('.ks'))
+        .map(f => {
+          const parts = f.path.split('/');
+          return {
+            path: f.path,
+            name: parts[parts.length - 1],
+            dir:  parts.length > 1 ? parts.slice(0, -1).join('/') : '',
+          };
+        })
+        .sort((a, b) => a.path.localeCompare(b.path));
+      loaded = true;
+      if (allPatches.length === 0) {
+        status.textContent = 'no .ks files found in repo';
+      } else {
+        render('');
+      }
+    } catch (e) {
+      status.textContent = `error: ${e.message}`;
+    }
+  }
+
+  function render(filter) {
+    list.innerHTML = '';
+    const q = filter.toLowerCase();
+    const matches = allPatches.filter(p =>
+      !q || p.path.toLowerCase().includes(q)
+    );
+    if (matches.length === 0) {
+      const s = document.createElement('div');
+      s.id = 'patch-status';
+      s.textContent = 'no matches';
+      list.appendChild(s);
+      return;
+    }
+    let lastDir = null;
+    matches.forEach(p => {
+      if (p.dir !== lastDir) {
+        const d = document.createElement('div');
+        d.className = 'patch-dir';
+        d.textContent = p.dir || '/';
+        list.appendChild(d);
+        lastDir = p.dir;
+      }
+      const btn = document.createElement('button');
+      btn.className = 'patch-item';
+      btn.textContent = p.name;
+      btn.title = p.path;
+      btn.addEventListener('click', () => loadPatch(p));
+      list.appendChild(btn);
+    });
+  }
+
+  async function loadPatch(p) {
+    const btn = list.querySelector(`[title="${p.path}"]`);
+    if (btn) { btn.textContent = '…'; btn.disabled = true; }
+    try {
+      const res = await fetch(`${RAW}/${p.path}`);
+      if (!res.ok) throw new Error(`fetch ${res.status}`);
+      const text = await res.text();
+      editor.value = text;
+      close();
+      editor.focus();
+    } catch (e) {
+      if (btn) { btn.textContent = p.name; btn.disabled = false; }
+      alert(`Could not load ${p.path}: ${e.message}`);
+    }
+  }
+
+  btnFix.addEventListener('click', e => { reconnectAudio(); });
+  btnOpen.addEventListener('click', open);
+  btnClose.addEventListener('click', close);
+  browser.addEventListener('click', e => { if (e.target === browser) close(); });
+  search.addEventListener('input', () => { if (loaded) render(search.value); });
+  document.addEventListener('keydown', e => {
+    if (e.key === 'Escape' && browser.classList.contains('open')) close();
+  });
+}());
+
+/* ═══════════════════════════════════════════════════════════════════
+   RESIZABLE SPLIT (desktop)
+   ═══════════════════════════════════════════════════════════════════ */
+
+(function () {
+  const divider   = document.getElementById('divider');
+  const main      = document.getElementById('main');
+  let dragging    = false;
+  let startX      = 0;
+  let startW      = 0;
+
+  const rightPanel = document.getElementById('right-panel');
+
+  function setRightWidth(px) {
+    const mainW   = main.offsetWidth;
+    const minL    = 180;
+    const minR    = 200;
+    const clamped = Math.max(minR, Math.min(px, mainW - minL - 5));
+    const pct     = (clamped / mainW * 100).toFixed(2) + '%';
+    document.documentElement.style.setProperty('--right-w', pct);
+  }
+
+  divider.addEventListener('pointerdown', e => {
+    if (window.innerWidth < 768) return;
+    dragging = true;
+    startX   = e.clientX;
+    startW   = rightPanel.offsetWidth;
+    divider.classList.add('dragging');
+    divider.setPointerCapture(e.pointerId);
+    e.preventDefault();
+  });
+
+  divider.addEventListener('pointermove', e => {
+    if (!dragging) return;
+    // moving left increases right panel width
+    setRightWidth(startW - (e.clientX - startX));
+  });
+
+  divider.addEventListener('pointerup', () => {
+    dragging = false;
+    divider.classList.remove('dragging');
+  });
+
+  window.addEventListener('resize', () => {
+    if (window.innerWidth < 768) return;
+    setRightWidth(rightPanel.offsetWidth);
+  });
+}());
+
+/* ═══════════════════════════════════════════════════════════════════
+   BOOT
+   ═══════════════════════════════════════════════════════════════════ */
+
+renderSlotStrip();
+initWasm();
+editor.focus();
+</script>
+</body>
+</html>
+```
+

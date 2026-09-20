@@ -1,0 +1,106 @@
+\ldrums-chh.ks
+\ldrums-clap.ks
+\ldrums-clave.ks
+\ldrums-cowbell.ks
+\ldrums-cymbal.ks
+\pW
+\ldrums-hitom.ks
+\pW
+\ldrums-kick.ks
+\pW
+\ldrums-lotom.ks
+\pW
+N:!8
+~N
+\t
+~N
+~(!N)
+~5
+~10
+~1024
+P:>(~1024)
+P:>(~)
+P:>(~4096)
+P:>(~2048)
+P:>(~1024)
+P:><(~1024)
+P:<(~1024)
+P:+(~1024)
+P:~8
+s P
+c P
+t P
+h P
+d P
+a P
+q P
+l P
+e P
+x P
+_ P
+/ 808 Cowbell — two detuned square-ish oscillators
+/ Real 808 cowbell: ~540Hz and ~440Hz, non-harmonic interval
+/ The interval (~minor third) is what gives it that hollow metallic clang
+/ Short decay for normal use — can stretch N for longer
+N: 11025
+T: !N
+C: p2%p0
+/ metallic decay — cowbell has a fast initial drop then longer tail
+E: e(T*(0-15%N))
+/ two oscillators at specific non-harmonic frequencies
+/ 540 and 442 Hz — the slight detuning from 440 adds beating character
+P: +\(N#(540*C))
+Q: +\(N#(442*C))
+/ approximate square wave character via odd harmonics
+/ using additive: fund + 3rd + 5th (scaled down)
+SP: (s P)+(s(P*3)*.33)+(s(P*5)*.2)
+SQ: (s Q)+(s(Q*3)*.33)+(s(Q*5)*.2)
+M: SP+SQ*.8
+/ bandpass the result — cowbell has a nasal mid focus
+A: 0.6 f M
+Z: 0.35 f M
+B: A-Z
+W: w E*B
+\vW
+\vB
+\t
+N
+T
+C
+E
+P
+N:1024
+P:~N
+\t
+N
+~N
+P:~N
+N:1024
+P:~N
+\t
+N
+P
+T:sP
+D:88200
+w T t 440 D
+W:w T t 440 D
+\pW
+\vW
+P<p1
+P<(p1)
+P<(p1)%(p2)
+(p1)%(p2)
+P<(p1)%(p2)
+P
+P<0
+P>0
++(P>0)
++(P<0)
++(T<0)
++(T>0)
+A:P<0
+\vA
+\pW
+\v
+\pA
+\q

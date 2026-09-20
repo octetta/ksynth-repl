@@ -1,0 +1,406 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ksynth — readme</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+:root,[data-theme="retro"]{--bg:#0e1116;--surface:#161b22;--surface2:#1c2128;--border:#21262d;--border2:#30363d;--text:#e6edf3;--muted:#7d8590;--accent:#3fb950;--accent-dim:#1a3a1f;--error:#f85149;--error-dim:#3a1a1a;--warn:#d29922;--font:'JetBrains Mono','Cascadia Code','Fira Mono',monospace;--radius:4px}
+[data-theme="dark"]{--bg:#1a1a2e;--surface:#16213e;--surface2:#0f3460;--border:#1a2a4a;--border2:#2a3a5a;--text:#e0e0ff;--muted:#8888bb;--accent:#e94560;--accent-dim:#3a0f1a;--error:#ff6b6b;--error-dim:#3a1a1a;--warn:#ffa500;--font:'JetBrains Mono','Cascadia Code','Fira Mono',monospace;--radius:4px}
+[data-theme="light"]{--bg:#f5f5f0;--surface:#ffffff;--surface2:#ebebeb;--border:#d0d0c8;--border2:#b8b8b0;--text:#1a1a1a;--muted:#666660;--accent:#0070f3;--accent-dim:#ddeeff;--error:#cc0000;--error-dim:#ffeeee;--warn:#996600;--font:'JetBrains Mono','Cascadia Code','Fira Mono',monospace;--radius:4px}
+html,body{min-height:100%;background:var(--bg);color:var(--text);font-family:var(--font);font-size:14px;line-height:1.7;margin:0;padding:0}
+#doc-header{position:sticky;top:0;z-index:10;background:var(--surface);border-bottom:1px solid var(--border);padding:8px 16px;display:flex;align-items:center;gap:10px}
+#doc-title{font-size:12px;font-weight:600;color:var(--accent);flex:1}
+.doc-nav-btn,#btn-doc-theme{background:transparent;border:1px solid var(--border2);border-radius:4px;color:var(--muted);font-family:var(--font);font-size:11px;padding:3px 8px;cursor:pointer;text-decoration:none;display:inline-block}
+.doc-nav-btn:hover,#btn-doc-theme:hover{border-color:var(--text);color:var(--text)}
+#doc-body{max-width:800px;margin:0 auto;padding:32px 24px 64px}
+h1,h2,h3,h4{color:var(--text);font-weight:600;margin:1.8em 0 0.5em;line-height:1.3}
+h1{font-size:1.6em;color:var(--accent);border-bottom:1px solid var(--border);padding-bottom:.3em}
+h2{font-size:1.2em;border-bottom:1px solid var(--border);padding-bottom:.2em}
+h3{font-size:1.05em;color:var(--accent)}
+h4{font-size:1em;color:var(--muted)}
+p{margin:.6em 0}
+a{color:var(--accent);text-decoration:none}a:hover{text-decoration:underline}
+code{background:var(--surface2);border:1px solid var(--border);border-radius:3px;padding:1px 5px;font-size:.9em;color:var(--text)}
+pre{background:var(--surface);border:1px solid var(--border);border-radius:4px;padding:14px 16px;overflow-x:auto;margin:1em 0;position:relative}
+pre code{background:none;border:none;padding:0;font-size:.88em;line-height:1.6}
+.copy-btn{position:absolute;top:6px;right:6px;background:var(--surface2);border:1px solid var(--border2);border-radius:3px;color:var(--muted);font-family:var(--font);font-size:10px;padding:2px 7px;cursor:pointer;opacity:0;transition:opacity 100ms,color 100ms,border-color 100ms}
+pre:hover .copy-btn{opacity:1}.copy-btn:hover{color:var(--text);border-color:var(--text)}.copy-btn.copied{color:var(--accent);border-color:var(--accent)}
+blockquote{border-left:3px solid var(--accent);margin:1em 0;padding:.2em 1em;color:var(--muted)}
+table{border-collapse:collapse;width:100%;margin:1em 0;font-size:.9em}
+th,td{border:1px solid var(--border);padding:6px 12px;text-align:left}
+th{background:var(--surface);color:var(--accent);font-weight:600}
+tr:nth-child(even) td{background:var(--surface2)}
+ul,ol{padding-left:1.5em;margin:.5em 0}li{margin:.2em 0}
+hr{border:none;border-top:1px solid var(--border);margin:2em 0}
+::-webkit-scrollbar{width:6px;height:6px}::-webkit-scrollbar-track{background:transparent}::-webkit-scrollbar-thumb{background:var(--border2);border-radius:3px}::-webkit-scrollbar-thumb:hover{background:var(--muted)}
+</style>
+</head>
+<body>
+<div id="doc-header">
+  <span id="doc-title">ksynth — readme</span>
+  <a class="doc-nav-btn" href="index.html">&#8592; app</a><a class="doc-nav-btn" href="guide.html">guide</a><a class="doc-nav-btn" href="reference.html">reference</a><a class="doc-nav-btn" href="api.html">api</a>
+  <button id="btn-doc-theme">retro</button>
+</div>
+<div id="doc-body">
+<h1 id="ksynth">k/synth</h1>
+<blockquote>
+<p>“A pocket-calculator version of a synthesizer.”</p>
+</blockquote>
+<p>k/synth is a minimalist, array-oriented synthesis environment.
+Heavily inspired by the K/Simple lineage and the work of Arthur Whitney,
+it treats sound not as a stream, but as a holistic mathematical
+vector.</p>
+<p>Sound is a vector. A kick drum is a vector. A two-second bell tone is
+a vector. You do math on vectors and the result is audio. There are no
+tracks, no timelines, no patch cables — only expressions.</p>
+<hr />
+<h2 id="the-language">the language</h2>
+<p><strong>One-letter variables</strong> — <code>A</code>–<code>Z</code>
+globals only.</p>
+<p><strong>Right-associativity</strong> — expressions evaluate right to
+left.</p>
+<p><strong>Vectorised verbs</strong> — math applied to entire buffers at
+once.</p>
+<p><strong><code>W</code> is the output</strong> — every script must set
+<code>W: w ...</code> to produce audio.</p>
+<p><strong><code>p</code> constants</strong> — <code>p0</code> = 44100
+(sample rate). <code>pN</code> = N×π for N≥1. So <code>p1</code> = π,
+<code>p2</code> = 2π, <code>p3</code> = 3π, etc. Since <code>p</code> is
+a verb it applies element-wise: <code>p 2</code> = 2π, <code>p !4</code>
+= <code>[44100, π, 2π, 3π]</code>.</p>
+<p>The idiom <code>p2%p0</code> = 2π/44100 — the per-sample radian
+increment for 1 Hz — is the cleanest way to express the phase
+accumulator constant:</p>
+<pre><code>C: p2%p0               / 2π / 44100
+P: +\(N#(440*C))       / phase ramp for 440 Hz over N samples</code></pre>
+<p><strong>User-defined functions</strong> — <code>{ expression }</code>
+defines a function. Inside, <code>x</code> is the first argument and
+<code>y</code> is the second. Call with <code>arg1 FuncVar arg2</code>
+for two arguments or <code>FuncVar arg</code> for one.</p>
+<p>The phase accumulator as a reusable function:</p>
+<pre><code>C: p2%p0
+X: { +\(x#(y*C)) }    / x = n_samples, y = freq_hz
+P: N X 440             / phase ramp for 440 Hz
+Q: N X 445             / phase ramp for 445 Hz — 5 Hz beating with P
+R: N X 227             / slightly detuned octave below</code></pre>
+<p>Functions eliminate repetition in multi-voice scripts and make the
+intent readable. Define the function once, call it for each voice.</p>
+<hr />
+<h2 id="quick-start">quick start</h2>
+<pre><code>/ sine wave, 1 second, 440 Hz
+N: 44100
+T: !N
+W: w s +\(N#(440*(p2%p0)))</code></pre>
+<p>Press <code>Ctrl+Enter</code> to run. A cell appears in the notebook
+with a waveform. Click <code>→0</code> to bank to slot 0. Click the slot
+to play it.</p>
+<hr />
+<h2 id="what-it-can-do">what it can do</h2>
+<h3 id="wavetable-oscillator">wavetable oscillator</h3>
+<p><code>table t freq dur</code> — plays <code>table</code> as a DDS
+oscillator at <code>freq</code> Hz for <code>dur</code> samples, with
+linear interpolation. <code>freq</code> and <code>dur</code> form a
+two-element vector — scalar variables following a number are absorbed
+into the vector literal, so <code>T t 440 D</code> works naturally.</p>
+<p>Build tables using the phase accumulator pattern, using a separate
+variable for table size vs output duration:</p>
+<pre><code>/ sine at 440 Hz for 2 seconds
+N: 1024
+P: +\(N#(p2%N))
+T: s P
+D: 88200
+W: w T t 440 D</code></pre>
+<pre><code>/ sawtooth at 220 Hz for 1 second
+N: 1024
+P: +\(N#(1%N))
+T: (2*P)-1
+D: 44100
+W: w T t 220 D</code></pre>
+<pre><code>/ triangle at 330 Hz for 1 second
+N: 1024
+P: +\(N#(1%N))
+T: (2*a((2*P)-1))-1
+D: 44100
+W: w T t 330 D</code></pre>
+<pre><code>/ square wave at 220 Hz for 1 second
+N: 1024
+P: +\(N#(1%N))
+T: (2*(P&lt;0.5))-1
+D: 44100
+W: w T t 220 D</code></pre>
+<pre><code>/ FM wavetable at MIDI note 69 (A4) for 2 seconds
+N: 1024
+P: +\(N#(p2%N))
+I: 2.5
+T: s P+(I*s P)
+M: n69          / MIDI note 69 = 440 Hz; assign to M so &quot;T t M D&quot; works
+D: 88200
+W: w T t M D</code></pre>
+<p>Monadic <code>t</code> remains <code>tan</code>.</p>
+<h3 id="oscillators">oscillators</h3>
+<p>The phase accumulator pattern <code>+\(N#F)</code> where
+<code>F</code> is a per-sample phase increment gives a clean oscillator
+at any frequency. Apply <code>s</code> for sine, <code>c</code> for
+cosine, or do math on the raw ramp for triangle and sawtooth.</p>
+<pre><code>/ sawtooth at 220 Hz, 1 second (via harmonic sum)
+N: 44100
+T: !N
+F: 220*(p2%p0)
+P: +\(N#F)
+H: 1 0.5 0.333 0.25 0.2 0.167
+W: w P $ H</code></pre>
+<h3 id="fm-synthesis">FM synthesis</h3>
+<p>Right-associativity makes FM natural. <code>s P + Q</code> parses as
+<code>s(P + s(Q))</code> — carrier phase plus modulator sine.</p>
+<pre><code>/ FM bell: fast index decay, slow amplitude decay
+N: 88200
+T: !N
+A: e(T*(0-3%N))
+I: 3.5*e(T*(0-40%N))
+C: 440*(p2%p0)
+M: 440*(p2%p0)
+P: +\(N#C)
+Q: +\(N#M)
+W: w A*(s P+(I*s Q))</code></pre>
+<p>Vary the carrier-to-modulator ratio: <code>1.0</code> is warm and
+round, <code>1.4</code> is metallic, <code>3.5</code> is tubular.</p>
+<h3 id="additive-synthesis">additive synthesis</h3>
+<p><code>P o H</code> sums <code>sin(P×h)</code> for each harmonic
+<code>h</code> in <code>H</code> at equal amplitude. <code>P $ A</code>
+weights each harmonic by a corresponding amplitude in
+<code>A</code>.</p>
+<pre><code>/ organ: odd harmonics
+H: 1 3 5 7
+W: w P o H
+
+/ cello-ish: weighted series
+A: 1 0.6 0.4 0.25 0.15 0.08
+W: w P $ A</code></pre>
+<h3 id="envelopes">envelopes</h3>
+<p><code>e(T*(0-k%N))</code> gives exponential decay from 1 over N
+samples. <code>T*e(T*(0-k%N))</code> gives a percussive rise-and-fall
+shape peaking at sample <code>N/k</code>.</p>
+<p><strong>Exponential decay</strong> — a sine tone that fades out over
+2 seconds:</p>
+<pre><code>N: 88200
+T: !N
+A: e(T*(0-3%N))
+P: +\(N#(440*(p2%p0)))
+W: w A*s P</code></pre>
+<p>Adjust the <code>3</code> to taste — larger decays faster, smaller
+lingers longer. At <code>k=1</code> the decay is very slow; at
+<code>k=10</code> it’s a short pluck.</p>
+<p><strong>Percussive rise-and-fall</strong> — a thump that swells
+briefly then fades:</p>
+<pre><code>N: 44100
+T: !N
+A: T*e(T*(0-8%N))
+P: +\(N#(180*(p2%p0)))
+W: w A*s P</code></pre>
+<p>The peak lands at sample <code>N/k</code> — here <code>44100/8</code>
+≈ 5500 samples ≈ 125ms in. Good for kick and tom shapes.</p>
+<p><strong>Two envelopes on one voice</strong> — fast index decay for a
+bright attack, slow amplitude decay for the body (the FM bell
+pattern):</p>
+<pre><code>N: 88200
+T: !N
+A: e(T*(0-3%N))
+I: 3.5*e(T*(0-40%N))
+C: 440*(p2%p0)
+M: 440*(p2%p0)
+P: +\(N#C)
+Q: +\(N#M)
+W: w A*(s P+(I*s Q))</code></pre>
+<p><code>A</code> decays slowly (the ring). <code>I</code> decays fast
+(the clang). The combination is what makes it sound like a struck bell
+rather than a plain FM tone.</p>
+<p><strong>Soft clipping</strong> — <code>d</code> applies
+<code>tanh(3x)</code>, rounding peaks without hard discontinuities.
+Useful after loud envelopes:</p>
+<pre><code>N: 44100
+T: !N
+A: T*e(T*(0-5%N))
+P: +\(N#(220*(p2%p0)))
+W: w d A*s P</code></pre>
+<h3 id="filters">filters</h3>
+<p>Two Chamberlin-derived lowpass filters — same topology, different
+cutoff convention.</p>
+<p><strong><code>f</code> — normalised coefficient</strong></p>
+<p><code>ct f signal</code> — cutoff <code>ct</code> is a coefficient
+0.0–0.95. Approximate mapping: 0.05 ≈ 350 Hz, 0.1 ≈ 700 Hz, 0.2 ≈ 1.4
+kHz, 0.4 ≈ 3 kHz, 0.7 ≈ 6.5 kHz.</p>
+<p>Optional resonance as second parameter:
+<code>0.2 1.5 f signal</code>. Resonance 0–3.9. Note: the resonance
+feedback is from the lowpass tap rather than the bandpass tap, so it
+produces a broad shelf boost near cutoff rather than a sharp resonant
+peak — stable and musical, not Moog-style self-oscillation.</p>
+<p><strong><code>g</code> — Hz input</strong></p>
+<p><code>freq_hz g signal</code> — same filter, cutoff in Hz directly.
+Optional resonance: <code>800 2.0 g signal</code>. Accepts a modulation
+vector for swept cutoff:</p>
+<pre><code>N: 44100
+T: !N
+/ LFO sweeping cutoff 200–1200 Hz at 3 Hz
+L: 700+(500*s +\(N#(3*(p2%N))))
+W: w L g r T</code></pre>
+<p><strong>Highpass and bandpass</strong></p>
+<p>Highpass — subtract the lowpass from the signal. Clean at zero
+resonance. With resonance, <code>signal - L</code> develops a shelf
+artefact near cutoff — usable but not a true resonant highpass:</p>
+<pre><code>N: 44100
+T: !N
+R: r T
+L: 0.1 f R
+W: w R-L</code></pre>
+<p>Bandpass — subtract two lowpass filters at different cutoffs. Works
+correctly at any resonance:</p>
+<pre><code>N: 44100
+T: !N
+R: r T
+H: 0.4 f R      / lowpass ~3 kHz
+L: 0.05 f R     / lowpass ~350 Hz
+W: w H-L        / band between them</code></pre>
+<p>Use <code>f</code> when working with normalised coefficients. Use
+<code>g</code> when thinking in Hz.</p>
+<h3 id="noise-and-percussion">noise and percussion</h3>
+<p><code>r T</code> — white noise. <code>m T</code> — 1-bit metallic
+noise, good for cymbals.</p>
+<pre><code>/ kick: pitch-swept sine + noise transient
+N: 13230
+T: !N
+F: 50+91*e(T*(0-60%N))
+P: +\(N#(F*(p2%p0)))
+S: (s P)*e(T*(0-6.9%N))
+R: 0.5 f r T
+E: e(T*(0-40%N))
+W: w (S+(R*E))</code></pre>
+<h3 id="patterns">patterns</h3>
+<p>The <code>,</code> operator concatenates vectors. A bar of drums is
+individual voice vectors joined in sequence:</p>
+<pre><code>Z: K,K,S,K,K,S,K,K,S,C,C,C,O,S,S</code></pre>
+<h3 id="feedback-delay">feedback delay</h3>
+<p><code>[d g] y signal</code> — feedback delay of <code>d</code>
+samples with gain <code>g</code>. Each output sample is
+<code>signal[i] + g * output[i-d]</code>. The output is the same length
+as the input.</p>
+<p><strong>Pitched metallic noise</strong> — white noise through a comb
+filter resonates strongly at the frequency matching the delay period and
+its harmonics. Delay of <code>SR/freq</code> samples tunes the
+resonance:</p>
+<pre><code>N: 44100
+T: !N
+R: r T
+W: w 100 0.9 y R      / comb resonance at ~441 Hz</code></pre>
+<p>Change <code>100</code> to <code>200</code> for ~220 Hz,
+<code>50</code> for ~882 Hz. Higher gain = stronger resonance and more
+metallic character.</p>
+<p><strong>Echo on a decaying sound</strong> — the echo is only audible
+as a distinct repeat when the source has decayed before the delayed copy
+arrives. A bell with a 300ms echo:</p>
+<pre><code>N: 88200
+T: !N
+C: p2%p0
+A: e(T*(0-4%N))
+I: 3.5*e(T*(0-40%N))
+P: +\(N#(440*C))
+Q: +\(N#(440*C))
+S: A*(s P+(I*s Q))
+W: w 13230 0.5 y S    / 300ms echo at 50% level</code></pre>
+<p><strong>Resonant frequency boost</strong> — when the delay exactly
+matches the period of the input frequency, each feedback cycle arrives
+perfectly in phase and the amplitude builds dramatically:</p>
+<pre><code>N: 44100
+T: !N
+C: p2%p0
+S: s +\(N#(220*C))
+W: w 200 0.9 y S      / delay=200 = one period of 220 Hz, strong resonance</code></pre>
+<h3 id="stereo-interleave">stereo interleave</h3>
+<p><code>A z B</code> — interleaves two vectors into a stereo stream:
+<code>[a0, b0, a1, b1, ...]</code>. Output length is
+<code>min(A.length, B.length) * 2</code>. Useful for producing stereo
+output from two separately synthesised channels.</p>
+<p><strong>Two voices panned left and right:</strong></p>
+<pre><code>N: 44100
+T: !N
+C: p2%p0
+/ left: bell at 440 Hz
+A: e(T*(0-3%N))
+I: 3.5*e(T*(0-40%N))
+P: +\(N#(440*C))
+Q: +\(N#(440*C))
+L: A*(s P+(I*s Q))
+/ right: bell at 445 Hz (slight detune for stereo width)
+B: e(T*(0-3%N))
+J: 3.5*e(T*(0-40%N))
+U: +\(N#(445*C))
+V: +\(N#(445*C))
+R: B*(s U+(J*s V))
+/ interleave into stereo
+W: w L z R</code></pre>
+<p>The resulting buffer has stereo sample pairs. Whether it plays back
+correctly as stereo depends on the player — the ksynth web app plays
+mono, so both channels will be summed.</p>
+<hr />
+<h2 id="inspect-commands">inspect commands</h2>
+<p>In the editor or REPL, type and press Enter:</p>
+<table>
+<thead>
+<tr>
+<th>Command</th>
+<th>Action</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>\pV</code></td>
+<td>Play variable <code>V</code> scaled to audio levels</td>
+</tr>
+<tr>
+<td><code>\vV</code></td>
+<td>Graph variable <code>V</code> — min, max, zero line, length</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2 id="build">build</h2>
+<pre class="sh"><code># WebAssembly (requires Emscripten)
+source /path/to/emsdk/emsdk_env.sh
+bash build.sh
+
+# Headless C binary
+gcc -O2 ksynth.c ks_api.c -lm -o ksynth</code></pre>
+<p>Serve with <code>python3 -m http.server 8080</code> and open
+<code>http://localhost:8080</code>.</p>
+<hr />
+<h2 id="web-interface">web interface</h2>
+<ul>
+<li><strong>16 slots</strong> — bank any evaluated buffer to a slot;
+click to play; right-click for tuning and WAV export</li>
+<li><strong>notebook</strong> — append-only run log with waveforms;
+collapse/expand; <code>→ edit</code> copies back to editor</li>
+<li><strong>pad panel</strong> — 4×4 grid, drum or melodic preset,
+per-pad slot and pitch assignment</li>
+<li><strong>drum-grid sequencer</strong> — 4 rows × up to 16 steps,
+editable while running</li>
+<li><strong>separate mode patterns</strong> — drum and melodic each keep
+independent sequencer state</li>
+<li><strong>pad-referenced rows</strong> — each sequencer row selects
+pad <code>0..F</code> and follows that pad’s slot + semitone setup</li>
+<li><strong>REPL strip</strong> — persistent single-line calculator
+below the editor</li>
+<li><strong>session save/load</strong> — <code>.json</code> format
+compatible with ksynth-desktop</li>
+<li><strong>patches browser</strong> — load <code>.ks</code> files
+directly from this repo</li>
+</ul>
+
+</div>
+<script>
+(function(){var THEMES=['retro','dark','light'];var btn=document.getElementById('btn-doc-theme');function applyTheme(t){document.documentElement.setAttribute('data-theme',t);btn.textContent=t;localStorage.setItem('ks-theme',t)}var saved=localStorage.getItem('ks-theme');applyTheme(THEMES.includes(saved)?saved:'retro');btn.addEventListener('click',function(){var cur=document.documentElement.getAttribute('data-theme')||'retro';var next=THEMES[(THEMES.indexOf(cur)+1)%THEMES.length];applyTheme(next)});}());
+document.querySelectorAll('pre').forEach(function(pre){var btn=document.createElement('button');btn.className='copy-btn';btn.textContent='copy';btn.addEventListener('click',function(){var code=pre.querySelector('code');var text=code?code.innerText:pre.innerText;navigator.clipboard.writeText(text).then(function(){btn.textContent='copied';btn.classList.add('copied');setTimeout(function(){btn.textContent='copy';btn.classList.remove('copied')},1500)})});pre.appendChild(btn)});
+</script>
+</body>
+</html>
