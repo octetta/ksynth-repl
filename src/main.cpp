@@ -618,7 +618,7 @@ int main(int argc, char** argv) {
     int events_port = -1;
     bool enable_scope = false;
     const char* file_to_load = nullptr;
-    const char* midi_name = "ksynth-repl";
+    const char* midi_name = nullptr;
 
     for (int i=1; i<argc; i++) {
         if (strcmp(argv[i], "--scope") == 0 || strcmp(argv[i], "-s") == 0) {
@@ -679,6 +679,13 @@ int main(int argc, char** argv) {
     if (max_voices == -1) {
         if (config.max_voices > 0) max_voices = config.max_voices;
         else max_voices = 8;
+    }
+    if (midi_name == nullptr) {
+        if (config.midi_port_name[0] != '\0') midi_name = config.midi_port_name;
+        else midi_name = "ksynth-repl";
+    } else {
+        strncpy(config.midi_port_name, midi_name, sizeof(config.midi_port_name) - 1);
+        config.midi_port_name[sizeof(config.midi_port_name) - 1] = '\0';
     }
     hazel_set_config(app, &config);
 

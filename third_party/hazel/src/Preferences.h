@@ -5,6 +5,7 @@
 #include <FL/Fl_Button.H>
 #include <FL/Fl_Box.H>
 #include <FL/Fl_Value_Input.H>
+#include <FL/Fl_Input.H>
 #include "hazel/hazel.h"
 #include <string>
 #include <FL/Fl_Color_Chooser.H>
@@ -30,6 +31,7 @@ class PreferencesWindow : public Fl_Double_Window {
     Fl_Value_Input* udp_port_input_;
     Fl_Value_Input* max_voices_input_;
     Fl_Value_Input* events_port_input_;
+    Fl_Input* midi_port_input_;
     Fl_Box* preview_;
     Fl_Button* ok_;
     Fl_Button* cancel_;
@@ -81,6 +83,7 @@ public:
         max_voices_input_->bounds(1, 128);
         max_voices_input_->value(current_cfg.max_voices > 0 ? current_cfg.max_voices : 8);
 
+
         new Fl_Box(10, 320, 100, 25, "UDP Port:");
         udp_port_input_ = new Fl_Value_Input(110, 320, 80, 25);
         udp_port_input_->step(1);
@@ -90,6 +93,10 @@ public:
         events_port_input_ = new Fl_Value_Input(310, 320, 80, 25);
         events_port_input_->step(1);
         events_port_input_->value(current_cfg.events_port);
+
+        new Fl_Box(10, 350, 100, 25, "MIDI Port:");
+        midi_port_input_ = new Fl_Input(110, 350, 150, 25);
+        midi_port_input_->value(current_cfg.midi_port_name[0] ? current_cfg.midi_port_name : "ksynth-repl");
         
         preview_ = new Fl_Box(10, 325, 400, 40, "⢀⣴⣾⣿⣿⣷⣦⡀ ⣾⣿ Braille Test");
         preview_->box(FL_DOWN_BOX);
@@ -320,6 +327,8 @@ public:
             self->out_cfg_.udp_port = (int)self->udp_port_input_->value();
             self->out_cfg_.max_voices = (int)self->max_voices_input_->value();
             self->out_cfg_.events_port = (int)self->events_port_input_->value();
+            strncpy(self->out_cfg_.midi_port_name, self->midi_port_input_->value(), sizeof(self->out_cfg_.midi_port_name) - 1);
+            self->out_cfg_.midi_port_name[sizeof(self->out_cfg_.midi_port_name) - 1] = '\0';
             self->out_cfg_.text_fg = self->btn_fg_->my_color;
             self->out_cfg_.error_fg = self->btn_err_fg_->my_color;
             self->out_cfg_.markdown_fg = self->btn_md_fg_->my_color;

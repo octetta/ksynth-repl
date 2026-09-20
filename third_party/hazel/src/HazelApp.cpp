@@ -1769,6 +1769,7 @@ void HazelApp::savePreferences(const std::string& font_name, int theme, int size
         out << size << "\n";
         out << config_.text_fg << " " << config_.input_bg << " " << config_.output_bg << " " << config_.error_bg << " " << config_.markdown_bg << " " << config_.error_fg << " " << config_.markdown_fg << " " << config_.cursor_fg << " " << config_.cursor_bg << " " << config_.select_bg << "\n";
         out << config_.udp_port << " " << config_.events_port << " " << config_.max_voices << "\n";
+        out << (config_.midi_port_name[0] ? config_.midi_port_name : "ksynth-repl") << "\n";
     }
 }
 
@@ -1805,16 +1806,25 @@ void HazelApp::loadPreferences() {
                 config_.events_port = evt;
                 if (in >> mv) config_.max_voices = mv;
                 else config_.max_voices = 8;
+                std::string mpn;
+                if (in >> mpn) {
+                    strncpy(config_.midi_port_name, mpn.c_str(), sizeof(config_.midi_port_name) - 1);
+                    config_.midi_port_name[sizeof(config_.midi_port_name) - 1] = '\0';
+                } else {
+                    strcpy(config_.midi_port_name, "ksynth-repl");
+                }
             } else {
                 config_.udp_port = 60440;
                 config_.events_port = 60441;
                 config_.max_voices = 8;
+                strcpy(config_.midi_port_name, "ksynth-repl");
             }
         } else {
             config_.select_bg = fl_rgb_color(180, 200, 255);
             config_.udp_port = 60440;
             config_.events_port = 60441;
             config_.max_voices = 8;
+            strcpy(config_.midi_port_name, "ksynth-repl");
         }
         
         hazel_config_t cfg = config_;

@@ -31,6 +31,7 @@ typedef struct {
     int udp_port;
     int max_voices;
     int events_port;
+    char midi_port_name[64];
     int (*on_open)(hazel_app_t* app, const char* filepath, void* user_data);
     int (*on_save)(hazel_app_t* app, const char* filepath, void* user_data);
     int (*on_open_dir)(hazel_app_t* app, const char* dirpath, void* user_data);
