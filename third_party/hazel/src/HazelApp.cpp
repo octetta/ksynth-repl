@@ -1800,12 +1800,12 @@ void HazelApp::loadPreferences() {
             if (!(in >> sel_b)) sel_b = fl_rgb_color(180, 200, 255);
             config_.select_bg = sel_b; // Temporary save to config_ so it propagates
             
-            int udp = 60440, evt = 60441, mv = 8;
+            int udp = 60440, evt = 60441, mv = 16;
             if (in >> udp >> evt) {
                 config_.udp_port = udp;
                 config_.events_port = evt;
                 if (in >> mv) config_.max_voices = mv;
-                else config_.max_voices = 8;
+                else config_.max_voices = 16;
                 std::string mpn;
                 if (in >> mpn) {
                     strncpy(config_.midi_port_name, mpn.c_str(), sizeof(config_.midi_port_name) - 1);
@@ -1816,14 +1816,14 @@ void HazelApp::loadPreferences() {
             } else {
                 config_.udp_port = 60440;
                 config_.events_port = 60441;
-                config_.max_voices = 8;
+                config_.max_voices = 16;
                 strcpy(config_.midi_port_name, "ksynth-repl");
             }
         } else {
             config_.select_bg = fl_rgb_color(180, 200, 255);
             config_.udp_port = 60440;
             config_.events_port = 60441;
-            config_.max_voices = 8;
+            config_.max_voices = 16;
             strcpy(config_.midi_port_name, "ksynth-repl");
         }
         

@@ -109,6 +109,7 @@ typedef struct {
   float atten;
   int stereo;
   int active;
+  int owns_buffer;
 } Voice;
 
 volatile Voice* voices = nullptr;
@@ -139,10 +140,10 @@ void trigger_midi_note(int channel, int note, int velocity) {
         voices[v].active = 0; // temporarily disable
     }
     
-    if (voices[v].buffer) free(voices[v].buffer);
-    voices[v].buffer = (float*)malloc(banks[note].length * sizeof(float));
-    memcpy(voices[v].buffer, banks[note].buffer, banks[note].length * sizeof(float));
+    if (voices[v].buffer && voices[v].owns_buffer) free(voices[v].buffer);
+    voices[v].buffer = banks[note].buffer; // Point directly to bank memory
     voices[v].n = banks[note].length;
+    voices[v].owns_buffer = 0;
     voices[v].idx = 0;
     
     float semis = banks[note].base_semis;
@@ -348,10 +349,10 @@ void my_eval_engine(const char* input, hazel_ctx_t* ctx, void* user_data) {
                             if (!voices[i].active) { vslot = i; break; }
                         }
                         if (vslot != -1) {
-                            if (voices[vslot].buffer) free(voices[vslot].buffer);
+                            if (voices[vslot].buffer && voices[vslot].owns_buffer) free(voices[vslot].buffer);
                             voices[vslot].n = banks[slot].length;
-                            voices[vslot].buffer = (float*)malloc(voices[vslot].n * sizeof(float));
-                            memcpy(voices[vslot].buffer, banks[slot].buffer, voices[vslot].n * sizeof(float));
+                            voices[vslot].buffer = banks[slot].buffer;
+                            voices[vslot].owns_buffer = 0;
                             voices[vslot].idx = 0;
                             voices[vslot].phase_inc = pow(2.0, (semis + cents / 100.0) / 12.0);
                             
@@ -462,10 +463,11 @@ void my_eval_engine(const char* input, hazel_ctx_t* ctx, void* user_data) {
                             }
                         }
                         if (slot != -1) {
-                            if (voices[slot].buffer) free(voices[slot].buffer);
+                            if (voices[slot].buffer && voices[slot].owns_buffer) free(voices[slot].buffer);
                             voices[slot].n = r;
                             voices[slot].buffer = (float*)malloc(r * sizeof(float));
                             memcpy(voices[slot].buffer, buf, r * sizeof(float));
+                            voices[slot].owns_buffer = 1;
                             voices[slot].idx = 0;
                             voices[slot].phase_inc = 1.0;
                             voices[slot].gain = 1.0f;
@@ -678,7 +680,7 @@ int main(int argc, char** argv) {
     if (events_port >= 0) config.events_port = events_port;
     if (max_voices == -1) {
         if (config.max_voices > 0) max_voices = config.max_voices;
-        else max_voices = 8;
+        else max_voices = 16;
     }
     if (midi_name == nullptr) {
         if (config.midi_port_name[0] != '\0') midi_name = config.midi_port_name;
