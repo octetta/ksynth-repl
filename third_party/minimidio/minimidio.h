@@ -1616,6 +1616,10 @@ static void* mm__alsa_recv_thread(void* arg)
            Pass fetch_sequencer=1 to snd_seq_event_input_pending so it
            actually queries the kernel — without this, virtual-port events
            sit in the kernel ring and the pending count reads as 0.          */
+        int pending = snd_seq_event_input_pending(al->seq, 1);
+        if (pending < 0) {
+            snd_seq_drop_input(al->seq);
+        }
         while (snd_seq_event_input_pending(al->seq, 1) > 0) {
 #if MM_ALSA_HAS_UMP
             if (dev->is_ump) {
