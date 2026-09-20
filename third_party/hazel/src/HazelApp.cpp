@@ -1745,14 +1745,20 @@ void HazelApp::evaluateCommand(const char* cmd, hazel_ctx_t* ctx) {
 #define OS_MKDIR(path) mkdir(path, 0755)
 #endif
 
-static std::string getPrefsPath() {
+std::string HazelApp::getPrefsPath() {
     const char* home = getenv("HOME");
-    if (!home) return "hazel_prefs.cfg";
+    std::string filename = app_title_;
+    for (char& c : filename) {
+        if (c == ' ' || c == '/') c = '_';
+        c = tolower(c);
+    }
+    filename += "_prefs.cfg";
+    if (!home) return filename;
     std::string dir = std::string(home) + "/.config";
     OS_MKDIR(dir.c_str());
     dir += "/hazel";
     OS_MKDIR(dir.c_str());
-    return dir + "/prefs.cfg";
+    return dir + "/" + filename;
 }
 
 void HazelApp::savePreferences(const std::string& font_name, int theme, int size) {

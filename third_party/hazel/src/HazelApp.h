@@ -42,6 +42,7 @@ public:
     int run();
     
     void loadPreferences();
+    std::string getPrefsPath();
     void showPreferences();
     void showHelpWindow();
     void zoomIn();
