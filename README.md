@@ -79,3 +79,43 @@ The KSynth-REPL is constantly evolving. Upcoming architectural targets include:
 - **Programmable Microtuning Maps (`\tm`)**: Similar to `\vc`, allowing the user to generate a 128-element frequency/pitch scalar array to define custom, non-12-TET musical scales (e.g., Just Intonation, Bohlen-Pierce).
 - **Array-driven Envelopes (`\env`)**: Replacing simple `attenuation` scalars with robust ADSR or custom envelope shapes defined entirely by arrays.
 - **Polyphonic Voice Stealing**: Intelligent routing of oldest-voice-stealing when exceeding the 8-voice maximum.
+
+
+## Network and MIDI Control
+
+`ksynth-repl` is fully controllable via hardware MIDI, virtual MIDI, and UDP network sockets. 
+
+### MIDI Input (Controllers & VMPK)
+
+When you launch `ksynth-repl`, it automatically initializes the `minimidio` backend. It will attempt to connect to your primary hardware MIDI controller automatically. Additionally, it exposes a **Virtual MIDI Port** named `ksynth-repl`. 
+
+If you are using a software controller like **VMPK (Virtual MIDI Piano Keyboard)**, simply open VMPK's settings and set the MIDI Output connection to `ksynth-repl`. 
+
+**Mapping Notes to Audio:**
+To trigger an audio sample via MIDI, you must assign a K-Synth array variable to a specific MIDI note (0-127) using the `` (bank) command:
+
+```ksynth
+/ 1. Load an audio file into the variable 'snare'
+a snare my_snare.wav
+
+/ 2. Map 'snare' to MIDI Note 60 (Middle C)
+/ Syntax:  [note] [var_name] [semis] [cents] [gain_db] [atten] [vel_sens]
+ 60 snare 0 0 0 1 1
+```
+Now, whenever you press Middle C on your MIDI keyboard, `ksynth-repl` will instantly trigger the `snare` array. *(Note: Note Off messages are currently ignored as voices act as one-shot triggers).*
+
+### UDP Commands (Port 60442)
+
+You can remote-control the REPL by sending raw ASCII strings to UDP port `60442`. Anything received here is evaluated exactly as if you had typed it into the terminal.
+
+You can test this from another terminal using `nc` (netcat):
+```bash
+echo "\p snare" | nc -u -w0 127.0.0.1 60442
+```
+
+### UDP Events (Port 60443)
+
+You can trigger voices over the network using Skred-style UDP binary events on port `60443`. The server expects lightweight 4-byte packets formatted as `[status, channel, data1, data2]`.
+
+To send a Note On (0x90) for Middle C (60) with max velocity (127):
+`[ 0x90, 0x00, 0x3C, 0x7F ]`
