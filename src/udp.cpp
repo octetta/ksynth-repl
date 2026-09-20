@@ -8,7 +8,7 @@
 #include <FL/Fl.H>
 
 extern void my_eval_engine(const char* input, struct hazel_ctx_t* ctx, void* user_data);
-extern void trigger_midi_note(int note, int velocity);
+extern void trigger_midi_note(int channel, int note, int velocity);
 
 static int cmd_socket = -1;
 static int evt_socket = -1;
@@ -48,13 +48,15 @@ static void* udp_evt_thread(void* arg) {
                     unsigned char status = buffer[i];
                     unsigned char data1 = buffer[i + 2]; // In Skred, 2 is Note
                     unsigned char data2 = buffer[i + 3]; // 3 is Vel
+                    unsigned char channel = buffer[i + 1]; // 1 is Channel
                     if ((status & 0xF0) == 0x90 && data2 > 0) {
                         Fl::awake([](void* data) {
                             long val = (long)data;
-                            int note = (val >> 8) & 0xFF;
-                            int vel = val & 0xFF;
-                            trigger_midi_note(note, vel);
-                        }, (void*)((long)((data1 << 8) | data2)));
+                            int c = (val >> 16) & 0xFF;
+                            int n = (val >> 8) & 0xFF;
+                            int v = val & 0xFF;
+                            trigger_midi_note(c, n, v);
+                        }, (void*)((long)((channel << 16) | (data1 << 8) | data2)));
                     }
                 }
             }

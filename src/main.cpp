@@ -114,7 +114,11 @@ typedef struct {
 volatile Voice voices[MAX_VOICES] = {0};
 
 void* global_hazel_ctx = NULL;
-void trigger_midi_note(int note, int velocity) {
+int midi_listen_channel = -1; // -1 = OMNI, 0-15 = Ch 1-16
+
+void trigger_midi_note(int channel, int note, int velocity) {
+    if (midi_listen_channel != -1 && channel != midi_listen_channel) return;
+
     if (note < 0 || note >= NUM_BANKS) return;
     if (!banks[note].buffer) return;
     
@@ -480,6 +484,27 @@ void my_eval_engine(const char* input, hazel_ctx_t* ctx, void* user_data) {
                     } else {
                         hazel_append_output(ctx, "Variable not found or empty\n", 1);
                     }
+                }
+            } else if (p[1] == 'm' && p[2] == 'c') {
+                char arg_str[16] = {0};
+                if (sscanf(p + 3, "%15s", arg_str) == 1) {
+                    int ch = -1;
+                    if (strcmp(arg_str, "all") == 0 || strcmp(arg_str, "omni") == 0) {
+                        ch = -1;
+                    } else {
+                        ch = atoi(arg_str) - 1;
+                    }
+                    if (ch >= -1 && ch <= 15) {
+                        midi_listen_channel = ch;
+                        char msg[64];
+                        if (ch == -1) snprintf(msg, sizeof(msg), "MIDI Channel: OMNI\n");
+                        else snprintf(msg, sizeof(msg), "MIDI Channel: %d\n", ch + 1);
+                        hazel_append_output(ctx, msg, 0);
+                    } else {
+                        hazel_append_output(ctx, "Invalid channel (use 'all' or 1-16)\n", 1);
+                    }
+                } else {
+                    hazel_append_output(ctx, "Usage: \\mc [all|1-16]\n", 1);
                 }
             } else if (p[1] == 'm' && p[2] == 'v') {
                 float db = 0.0f;

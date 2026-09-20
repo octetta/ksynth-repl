@@ -96,13 +96,28 @@ To trigger an audio sample via MIDI, you must assign a K-Synth array variable to
 
 ```ksynth
 / 1. Load an audio file into the variable 'snare'
-a snare my_snare.wav
+
+a snare my_snare.wav
 
 / 2. Map 'snare' to MIDI Note 60 (Middle C)
 / Syntax:  [note] [var_name] [semis] [cents] [gain_db] [atten] [vel_sens]
  60 snare 0 0 0 1 1
 ```
 Now, whenever you press Middle C on your MIDI keyboard, `ksynth-repl` will instantly trigger the `snare` array. *(Note: Note Off messages are currently ignored as voices act as one-shot triggers).*
+
+**MIDI Channel Filtering:**
+By default, the REPL listens in **Omni Mode** (accepting notes from all 16 channels). You can isolate it to a specific channel using the `\mc` (MIDI Channel) command:
+```ksynth
+/ Listen only to MIDI Channel 1
+\mc 1
+
+/ Listen only to MIDI Channel 10
+\mc 10
+
+/ Revert back to Omni Mode
+\mc all
+```
+
 
 ### UDP Commands (Port 60442)
 

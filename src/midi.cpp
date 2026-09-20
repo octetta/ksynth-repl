@@ -2,18 +2,20 @@
 #include "../third_party/minimidio/minimidio.h"
 #include <FL/Fl.H>
 
-extern void trigger_midi_note(int note, int velocity);
+extern void trigger_midi_note(int channel, int note, int velocity);
 
 void my_midi_callback(mm_device* dev, const mm_message* msg, void* userdata) {
     if (msg->type == MM_NOTE_ON && msg->data[1] > 0) {
         int note = msg->data[0];
         int vel = msg->data[1];
+        int ch = msg->channel;
         Fl::awake([](void* data) {
             long val = (long)data;
+            int c = (val >> 16) & 0xFF;
             int n = (val >> 8) & 0xFF;
             int v = val & 0xFF;
-            trigger_midi_note(n, v);
-        }, (void*)((long)((note << 8) | vel)));
+            trigger_midi_note(c, n, v);
+        }, (void*)((long)((ch << 16) | (note << 8) | vel)));
     }
 }
 
