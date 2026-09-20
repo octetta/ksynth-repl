@@ -1605,7 +1605,7 @@ static void* mm__alsa_recv_thread(void* arg)
     pfds[nalsa].events = POLLIN;
 
     while (da->running) {
-        if (poll(pfds, (nfds_t)nfds, -1) < 0) break;
+        if (poll(pfds, (nfds_t)nfds, -1) < 0) { if (errno == EINTR) continue; break; }
 
         /* Wakeup pipe: stop requested */
         if (pfds[nalsa].revents & POLLIN) {

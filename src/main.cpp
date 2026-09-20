@@ -254,7 +254,7 @@ int audio_start(void) {
 
 int audio_end(void) {
   for (int i = 0; i < max_voices; i++) {
-    if (voices[i].buffer) {
+    if (voices[i].buffer && voices[i].owns_buffer) {
       free(voices[i].buffer);
       voices[i].buffer = NULL;
     }
