@@ -213,11 +213,14 @@ int audio_end(void) {
   return 0;
 }
 
-static char get_var(const char *ptr) {
+static char* get_var(const char *ptr, char *out_name) {
   while (*ptr == ' ') ptr++;
-  char v_name = *ptr;
-  if (v_name >= 'A' && v_name <= 'Z') return v_name;
-  return '\0';
+  int i = 0;
+  while ((*ptr >= 'A' && *ptr <= 'Z') || (*ptr >= 'a' && *ptr <= 'z') || (*ptr >= '0' && *ptr <= '9') || *ptr == '_') {
+      out_name[i++] = *ptr++;
+  }
+  out_name[i] = '\0';
+  return (i > 0) ? out_name : NULL;
 }
 
 
@@ -360,9 +363,9 @@ void my_eval_engine(const char* input, hazel_ctx_t* ctx, void* user_data) {
                     is_quiet = 1;
                     arg++;
                 }
-                char v_name = get_var(arg);
-                if (v_name) {
-                    int r = ks_ctx_get_var(ks_handle, v_name);
+                char v_name[256];
+                if (get_var(arg, v_name)) {
+                    int r = ks_ctx_get_var_str(ks_handle, v_name);
                     float* buf = ks_ctx_get_var_buf(ks_handle);
                     if (r > 0 && buf) {
                         int slot = -1;
@@ -386,7 +389,7 @@ void my_eval_engine(const char* input, hazel_ctx_t* ctx, void* user_data) {
                             
                             if (!is_quiet) {
                                 char msg[64];
-                                snprintf(msg, sizeof(msg), "playing %c in slot %d (%s)\n", v_name, slot, is_stereo ? "stereo" : "mono");
+                                snprintf(msg, sizeof(msg), "playing %s in slot %d (%s)\n", v_name, slot, is_stereo ? "stereo" : "mono");
                                 hazel_append_output(ctx, msg, 0);
                             }
                         } else {
@@ -398,13 +401,13 @@ void my_eval_engine(const char* input, hazel_ctx_t* ctx, void* user_data) {
                 }
             } else if (p[1] == 'b') {
                 int slot = -1;
-                char v_name = 0;
+                char v_name[256] = {0};
                 float semis = 0.0f, cents = 0.0f, gain_db = 0.0f, atten = 1.0f, vel_sens = 1.0f;
                 char* arg = p + 2;
                 while (*arg == ' ') arg++;
-                int parsed = sscanf(arg, "%d %c %f %f %f %f %f", &slot, &v_name, &semis, &cents, &gain_db, &atten, &vel_sens);
+                int parsed = sscanf(arg, "%d %255s %f %f %f %f %f", &slot, v_name, &semis, &cents, &gain_db, &atten, &vel_sens);
                 if (parsed >= 2 && slot >= 0 && slot < NUM_BANKS) {
-                    int r = ks_ctx_get_var(ks_handle, v_name);
+                    int r = ks_ctx_get_var_str(ks_handle, v_name);
                     float* buf = ks_ctx_get_var_buf(ks_handle);
                     if (r > 0 && buf) {
                         if (banks[slot].buffer) free(banks[slot].buffer);
@@ -417,7 +420,7 @@ void my_eval_engine(const char* input, hazel_ctx_t* ctx, void* user_data) {
                         banks[slot].base_atten = atten;
                         banks[slot].base_vel_sens = vel_sens;
                         char msg[128];
-                        snprintf(msg, sizeof(msg), "Banked %c into slot %d (semi:%.1f, gain:%.1fdB, sens:%.2f)\n", v_name, slot, semis, gain_db, vel_sens);
+                        snprintf(msg, sizeof(msg), "Banked %s into slot %d (semi:%.1f, gain:%.1fdB, sens:%.2f)\n", v_name, slot, semis, gain_db, vel_sens);
                         hazel_append_output(ctx, msg, 0);
                     } else {
                         hazel_append_output(ctx, "Variable empty or invalid\n", 1);
@@ -426,9 +429,9 @@ void my_eval_engine(const char* input, hazel_ctx_t* ctx, void* user_data) {
                     hazel_append_output(ctx, "Invalid bank command (use: \\b [0-127] [A-Z])\n", 1);
                 }
             } else if (p[1] == '?') {
-                char v_name = get_var(p + 2);
-                if (v_name) {
-                    int r = ks_ctx_get_var(ks_handle, v_name);
+                char v_name[256];
+                if (get_var(p + 2, v_name)) {
+                    int r = ks_ctx_get_var_str(ks_handle, v_name);
                     float* buf = ks_ctx_get_var_buf(ks_handle);
                     if (r > 0 && buf) {
                         double* dbuf = (double*)malloc(r * sizeof(double));
@@ -452,16 +455,16 @@ void my_eval_engine(const char* input, hazel_ctx_t* ctx, void* user_data) {
                     hazel_append_output(ctx, "Usage: \\mv [dB]\n", 1);
                 }
             } else if (p[1] == 'v' && p[2] == 'c') {
-                char v_name = get_var(p + 3);
-                if (v_name) {
-                    int r = ks_ctx_get_var(ks_handle, v_name);
+                char v_name[256];
+                if (get_var(p + 3, v_name)) {
+                    int r = ks_ctx_get_var_str(ks_handle, v_name);
                     float* buf = ks_ctx_get_var_buf(ks_handle);
                     if (r >= 128 && buf) {
                         for (int i = 0; i < 128; i++) {
                             master_vel_curve[i] = buf[i];
                         }
                         char msg[64];
-                        snprintf(msg, sizeof(msg), "Loaded global velocity curve from %c\n", v_name);
+                        snprintf(msg, sizeof(msg), "Loaded global velocity curve from %s\n", v_name);
                         hazel_append_output(ctx, msg, 0);
                     } else {
                         hazel_append_output(ctx, "Array must be at least 128 elements long\n", 1);
