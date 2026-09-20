@@ -94,6 +94,9 @@ int my_dir_cb(hazel_app_t* app, const char* dirpath, void* user_data) {
 
 #include "miniaudio.h"
 #include "scope-ipc.h"
+#include "midi.h"
+#include "udp.h"
+
 
 #define MAX_VOICES 8
 
@@ -109,6 +112,39 @@ typedef struct {
 } Voice;
 
 volatile Voice voices[MAX_VOICES] = {0};
+
+void* global_hazel_ctx = NULL;
+void trigger_midi_note(int note, int velocity) {
+    if (note < 0 || note >= NUM_BANKS) return;
+    if (!banks[note].buffer) return;
+    
+    // Find free voice
+    int v = -1;
+    for (int i=0; i<MAX_VOICES; i++) {
+        if (!voices[i].active) { v = i; break; }
+    }
+    if (v == -1) return; // Voice stealing omitted for now
+    
+    if (voices[v].buffer) free(voices[v].buffer);
+    voices[v].buffer = (float*)malloc(banks[note].length * sizeof(float));
+    memcpy(voices[v].buffer, banks[note].buffer, banks[note].length * sizeof(float));
+    voices[v].n = banks[note].length;
+    voices[v].idx = 0;
+    
+    float semis = banks[note].base_semis;
+    float cents = banks[note].base_cents;
+    float freq_ratio = powf(2.0f, (semis + cents/100.0f) / 12.0f);
+    voices[v].phase_inc = freq_ratio;
+    
+    float gain = powf(10.0f, banks[note].base_gain_db / 20.0f);
+    float vel_sens = banks[note].base_vel_sens;
+    float vel_mult = velocity / 127.0f;
+    voices[v].gain = gain * (1.0f - vel_sens + vel_sens * vel_mult);
+    voices[v].atten = banks[note].base_atten;
+    voices[v].stereo = 0;
+    voices[v].active = 1;
+}
+
 
 void cb(ma_device* d, void* o, const void* i, ma_uint32 n) {
   float* out = (float*)o;
@@ -241,6 +277,7 @@ const char* ksynth_help_as_html(const char* ext) {
 }
 
 void my_eval_engine(const char* input, hazel_ctx_t* ctx, void* user_data) {
+    if (ctx) global_hazel_ctx = (void*)ctx;
     char* text = strdup(input);
     char* line = strtok(text, "\n");
     
@@ -552,8 +589,8 @@ int main(int argc, char** argv) {
     config.cursor_bg = FL_BLACK;
     config.select_bg = fl_rgb_color(180, 200, 255);
     config.parser_mode = 2; // MODE 2: comments start with /, note blocks with //
-    config.udp_port = 60540; // Placeholders
-    config.events_port = 60541; // Placeholders
+    config.udp_port = 60442; // Placeholders
+    config.events_port = 60443; // Placeholders
     config.on_open = my_load_cb;
     config.on_save = my_save_cb;
     config.on_open_dir = my_dir_cb;
@@ -571,7 +608,12 @@ int main(int argc, char** argv) {
     char status_str[256];
     snprintf(status_str, sizeof(status_str), "UDP: %d  Evts: %d",
              config.udp_port, config.events_port);
+    
     hazel_set_status(app, status_str);
+
+    midi_init();
+    udp_server_start(config.udp_port, config.events_port);
+
 
     hazel_set_app_version(app, "KSynth-REPL v0.1.0\nEngine: KSynth");
     
