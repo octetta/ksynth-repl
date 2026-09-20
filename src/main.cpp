@@ -118,6 +118,7 @@ void* global_hazel_ctx = NULL;
 int midi_listen_channel = -1; // -1 = OMNI, 0-15 = Ch 1-16
 
 void trigger_midi_note(int channel, int note, int velocity) {
+    // printf("trigger %d %d\n", note, velocity);
     if (midi_listen_channel != -1 && channel != midi_listen_channel) return;
 
     if (note < 0 || note >= NUM_BANKS) return;
@@ -137,6 +138,7 @@ void trigger_midi_note(int channel, int note, int velocity) {
                 v = i;
             }
         }
+        if (v == -1) v = 0; // Fallback in case of NaN corruption
         voices[v].active = 0; // temporarily disable
     }
     

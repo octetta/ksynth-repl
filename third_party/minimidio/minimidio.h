@@ -1686,7 +1686,8 @@ static void* mm__alsa_recv_thread(void* arg)
 
             snd_seq_event_t* ev = NULL;
             int rc = snd_seq_event_input(al->seq, &ev);
-            if (rc == -EAGAIN || rc == -ENOSPC) break; /* nothing left */
+            if (rc == -ENOSPC) continue; /* queue overrun, but event might be valid, just skip to next or process it. Actually let's just continue and not break! */
+            if (rc == -EAGAIN) break; /* nothing left */
             if (rc < 0 || !ev) break;
 
             mm_message msg; memset(&msg, 0, sizeof(msg));
