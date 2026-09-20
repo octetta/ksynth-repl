@@ -28,6 +28,7 @@ class PreferencesWindow : public Fl_Double_Window {
     Fl_Choice* theme_choice_;
     Fl_Value_Input* size_input_;
     Fl_Value_Input* udp_port_input_;
+    Fl_Value_Input* max_voices_input_;
     Fl_Value_Input* events_port_input_;
     Fl_Box* preview_;
     Fl_Button* ok_;
@@ -73,13 +74,20 @@ public:
         size_input_->bounds(8, 72);
         size_input_->value(current_cfg.font_size);
         
-        new Fl_Box(10, 290, 100, 25, "UDP Port:");
-        udp_port_input_ = new Fl_Value_Input(110, 290, 80, 25);
+
+        new Fl_Box(10, 290, 100, 25, "Max Voices:");
+        max_voices_input_ = new Fl_Value_Input(110, 290, 80, 25);
+        max_voices_input_->step(1);
+        max_voices_input_->bounds(1, 128);
+        max_voices_input_->value(current_cfg.max_voices > 0 ? current_cfg.max_voices : 8);
+
+        new Fl_Box(10, 320, 100, 25, "UDP Port:");
+        udp_port_input_ = new Fl_Value_Input(110, 320, 80, 25);
         udp_port_input_->step(1);
         udp_port_input_->value(current_cfg.udp_port);
 
-        new Fl_Box(200, 290, 100, 25, "Events Port:");
-        events_port_input_ = new Fl_Value_Input(310, 290, 80, 25);
+        new Fl_Box(200, 320, 100, 25, "Events Port:");
+        events_port_input_ = new Fl_Value_Input(310, 320, 80, 25);
         events_port_input_->step(1);
         events_port_input_->value(current_cfg.events_port);
         
@@ -310,6 +318,7 @@ public:
             self->selected_theme_ = self->theme_choice_->value();
             self->selected_size_ = (int)self->size_input_->value();
             self->out_cfg_.udp_port = (int)self->udp_port_input_->value();
+            self->out_cfg_.max_voices = (int)self->max_voices_input_->value();
             self->out_cfg_.events_port = (int)self->events_port_input_->value();
             self->out_cfg_.text_fg = self->btn_fg_->my_color;
             self->out_cfg_.error_fg = self->btn_err_fg_->my_color;

@@ -29,6 +29,7 @@ typedef struct {
     unsigned int select_bg;
     int parser_mode; // 0 = default, 1 = skred-repl contiguous mode
     int udp_port;
+    int max_voices;
     int events_port;
     int (*on_open)(hazel_app_t* app, const char* filepath, void* user_data);
     int (*on_save)(hazel_app_t* app, const char* filepath, void* user_data);

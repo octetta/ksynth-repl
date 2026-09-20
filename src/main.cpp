@@ -98,7 +98,7 @@ int my_dir_cb(hazel_app_t* app, const char* dirpath, void* user_data) {
 #include "udp.h"
 
 
-int max_voices = 8;
+int max_voices = -1;
 
 typedef struct {
   float* buffer;
