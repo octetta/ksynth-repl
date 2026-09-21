@@ -23,6 +23,9 @@ typedef struct {
     float base_gain_db;
     float base_atten;
     float base_vel_sens;
+    int loop_start;
+    int loop_end;
+    bool looping;
 } BankedWave;
 BankedWave banks[NUM_BANKS] = {0};
 
@@ -110,6 +113,12 @@ typedef struct {
   int stereo;
   int active;
   int owns_buffer;
+  int loop_start;
+  int loop_end;
+  bool looping;
+  int state; // 0 = inactive, 1 = attack/sustain, 2 = release
+  float release_gain;
+  int note; // which midi note triggered this
 } Voice;
 
 volatile Voice* voices = nullptr;
@@ -157,8 +166,24 @@ void trigger_midi_note(int channel, int note, int velocity) {
     voices[v].gain = gain * (1.0f - vel_sens + vel_sens * vel_mult);
     voices[v].atten = banks[note].base_atten;
     voices[v].stereo = 0;
+    voices[v].looping = banks[note].looping;
+    voices[v].loop_start = banks[note].loop_start;
+    voices[v].loop_end = banks[note].loop_end;
+    voices[v].state = 1;
+    voices[v].release_gain = 1.0f;
+    voices[v].note = note;
     voices[v].active = 1;
 }
+
+void release_midi_note(int channel, int note) {
+    if (midi_listen_channel != -1 && channel != midi_listen_channel) return;
+    for (int i=0; i<max_voices; i++) {
+        if (voices[i].active && voices[i].state == 1 && voices[i].note == note) {
+            voices[i].state = 2; // trigger release
+        }
+    }
+}
+
 
 
 void cb(ma_device* d, void* o, const void* i, ma_uint32 n) {
@@ -185,9 +210,17 @@ void cb(ma_device* d, void* o, const void* i, ma_uint32 n) {
     for (ma_uint32 j = 0; j < n; j++) {
       if (!voices[v].active) break;
       int i0 = (int)voices[v].idx;
-      if (i0 >= len || voices[v].gain <= 0.0001f) {
+      if (voices[v].looping && i0 >= voices[v].loop_end) {
+          voices[v].idx = voices[v].loop_start + fmod(voices[v].idx - voices[v].loop_end, voices[v].loop_end - voices[v].loop_start);
+          i0 = (int)voices[v].idx;
+      }
+      if (i0 >= len || voices[v].gain <= 0.0001f || voices[v].release_gain <= 0.0001f) {
         voices[v].active = 0;
         break;
+      }
+      
+      if (voices[v].state == 2) {
+          voices[v].release_gain *= 0.999f; // fast fade out
       }
       
       if (stereo) {
@@ -196,8 +229,8 @@ void cb(ma_device* d, void* o, const void* i, ma_uint32 n) {
           if (i0_s + 1 >= len) {
               voices[v].active = 0; break;
           }
-          out[j * 2] += buf[i0_s] * voices[v].gain;
-          out[j * 2 + 1] += buf[i0_s + 1] * voices[v].gain;
+          out[j * 2] += buf[i0_s] * voices[v].gain * voices[v].release_gain;
+          out[j * 2 + 1] += buf[i0_s + 1] * voices[v].gain * voices[v].release_gain;
           voices[v].idx += phase_inc * 2.0;
       } else {
           // Linear interpolation for mono
@@ -206,8 +239,8 @@ void cb(ma_device* d, void* o, const void* i, ma_uint32 n) {
           float frac = (float)(voices[v].idx - i0);
           float sample = buf[i0] + (buf[i1] - buf[i0]) * frac;
           
-          out[j * 2] += sample * voices[v].gain;
-          out[j * 2 + 1] += sample * voices[v].gain;
+          out[j * 2] += sample * voices[v].gain * voices[v].release_gain;
+          out[j * 2 + 1] += sample * voices[v].gain * voices[v].release_gain;
           voices[v].idx += phase_inc;
       }
       
@@ -527,6 +560,29 @@ void my_eval_engine(const char* input, hazel_ctx_t* ctx, void* user_data) {
                     } else {
                         hazel_append_output(ctx, "Variable not found or empty\n", 1);
                     }
+                }
+            } else if (p[1] == 'l' && p[2] == 'o' && p[3] == 'o' && p[4] == 'p') {
+                int note = -1, start = -1, end = -1;
+                if (sscanf(p + 6, "%d %d %d", &note, &start, &end) >= 1) {
+                    if (note >= 0 && note < NUM_BANKS) {
+                        if (start >= 0 && end > start) {
+                            banks[note].loop_start = start;
+                            banks[note].loop_end = end;
+                            banks[note].looping = true;
+                            char msg[128];
+                            snprintf(msg, sizeof(msg), "Bank %d looping set: %d to %d\n", note, start, end);
+                            hazel_append_output(ctx, msg, 0);
+                        } else {
+                            banks[note].looping = false;
+                            char msg[64];
+                            snprintf(msg, sizeof(msg), "Bank %d looping disabled\n", note);
+                            hazel_append_output(ctx, msg, 0);
+                        }
+                    } else {
+                        hazel_append_output(ctx, "Invalid note number\n", 1);
+                    }
+                } else {
+                    hazel_append_output(ctx, "Usage: \\loop <note> [start end]\n", 1);
                 }
             } else if (p[1] == 'm' && p[2] == 'c') {
                 char arg_str[16] = {0};

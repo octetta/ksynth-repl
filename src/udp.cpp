@@ -9,6 +9,7 @@
 
 extern void my_eval_engine(const char* input, struct hazel_ctx_t* ctx, void* user_data);
 extern void trigger_midi_note(int channel, int note, int velocity);
+extern void release_midi_note(int channel, int note);
 
 static int cmd_socket = -1;
 static int evt_socket = -1;
@@ -57,6 +58,13 @@ static void* udp_evt_thread(void* arg) {
                             int v = val & 0xFF;
                             trigger_midi_note(c, n, v);
                         }, (void*)((long)((channel << 16) | (data1 << 8) | data2)));
+                    } else if ((status & 0xF0) == 0x80 || ((status & 0xF0) == 0x90 && data2 == 0)) {
+                        Fl::awake([](void* data) {
+                            long val = (long)data;
+                            int c = (val >> 16) & 0xFF;
+                            int n = val & 0xFFFF;
+                            release_midi_note(c, n);
+                        }, (void*)((long)((channel << 16) | data1)));
                     }
                 }
             }

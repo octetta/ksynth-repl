@@ -3,6 +3,7 @@
 #include <FL/Fl.H>
 
 extern void trigger_midi_note(int channel, int note, int velocity);
+extern void release_midi_note(int channel, int note);
 
 void my_midi_callback(mm_device* dev, const mm_message* msg, void* userdata) {
     if (msg->type == MM_NOTE_ON && msg->data[1] > 0) {
