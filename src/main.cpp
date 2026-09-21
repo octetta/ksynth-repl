@@ -210,7 +210,7 @@ void cb(ma_device* d, void* o, const void* i, ma_uint32 n) {
     for (ma_uint32 j = 0; j < n; j++) {
       if (!voices[v].active) break;
       int i0 = (int)voices[v].idx;
-      if (voices[v].looping && i0 >= voices[v].loop_end) {
+      if (voices[v].looping && voices[v].state == 1 && i0 >= voices[v].loop_end) {
           voices[v].idx = voices[v].loop_start + fmod(voices[v].idx - voices[v].loop_end, voices[v].loop_end - voices[v].loop_start);
           i0 = (int)voices[v].idx;
       }
@@ -220,7 +220,11 @@ void cb(ma_device* d, void* o, const void* i, ma_uint32 n) {
       }
       
       if (voices[v].state == 2) {
-          voices[v].release_gain *= 0.999f; // fast fade out
+          if (voices[v].looping && voices[v].loop_end < len) {
+              // We have a tail! Don't force fade out, let it play to the end.
+          } else {
+              voices[v].release_gain *= 0.999f; // fast fade out
+          }
       }
       
       if (stereo) {
