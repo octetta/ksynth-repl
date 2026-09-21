@@ -566,6 +566,14 @@ void my_eval_engine(const char* input, hazel_ctx_t* ctx, void* user_data) {
                             voices[slot].gain = 1.0f;
                             voices[slot].atten = 1.0f;
                             voices[slot].stereo = is_stereo;
+                            //
+                            voices[slot].looping = false;
+                            voices[slot].loop_start = 0;
+                            voices[slot].loop_end = 0;
+                            voices[slot].state = 0;
+                            voices[slot].release_gain = 1.0f;
+                            voices[slot].note = 01;
+                            //
                             voices[slot].active = 1;
                             
                             if (!is_quiet) {
