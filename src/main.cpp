@@ -310,6 +310,64 @@ static char* get_var(const char *ptr, char *out_name) {
   return (i > 0) ? out_name : NULL;
 }
 
+static const char* expand_vars(const char* input) {
+    static char output[8192];
+
+    char* dst = output;
+    char* end = output + sizeof(output) - 1;
+
+    while (*input && dst < end) {
+        if (*input != '$') {
+            *dst++ = *input++;
+            continue;
+        }
+
+        input++;  // skip '$'
+
+        char name[256];
+        int n = 0;
+
+        while ((input[n] >= 'A' && input[n] <= 'Z') ||
+               (input[n] >= 'a' && input[n] <= 'z') ||
+               (input[n] >= '0' && input[n] <= '9') ||
+               input[n] == '_') {
+            if (n < (int)sizeof(name) - 1)
+                name[n] = input[n];
+            n++;
+        }
+
+        if (n == 0) {
+            *dst++ = '$';
+            continue;
+        }
+
+        int name_len = n;
+        if (name_len >= (int)sizeof(name))
+            name_len = sizeof(name) - 1;
+
+        name[name_len] = '\0';
+
+        // Advance past the variable name in the ORIGINAL string.
+        input += n;
+
+        int len = ks_ctx_get_var_str(ks_handle, name);
+        float* values = ks_ctx_get_var_buf(ks_handle);
+
+        float value = 0.0f;
+
+        if (len > 0 && values)
+            value = values[0];
+
+        int written = snprintf(dst, end - dst + 1, "%g", value);
+        if (written < 0 || dst + written > end)
+            break;
+
+        dst += written;
+    }
+
+    *dst = '\0';
+    return output;
+}
 
 const char* ksynth_help_as_html(const char* ext) {
     return "<h2>KSynth-REPL Help</h2>"
@@ -363,6 +421,8 @@ void my_eval_engine(const char* input, hazel_ctx_t* ctx, void* user_data) {
         
         if (p[0] == '\\') {
             flush_block();
+
+            p = (char*)expand_vars(p);
             
             if (p[1] == 'p' && p[2] == 'b') {
                 int slot = -1;
