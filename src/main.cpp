@@ -563,26 +563,46 @@ void my_eval_engine(const char* input, hazel_ctx_t* ctx, void* user_data) {
                 }
             } else if (p[1] == 'l' && p[2] == 'o' && p[3] == 'o' && p[4] == 'p') {
                 int note = -1, start = -1, end = -1;
-                if (sscanf(p + 6, "%d %d %d", &note, &start, &end) >= 1) {
-                    if (note >= 0 && note < NUM_BANKS) {
+                char note_str[16] = {0};
+                if (sscanf(p + 6, "%15s %d %d", note_str, &start, &end) >= 1) {
+                    bool do_all = (strcmp(note_str, "all") == 0);
+                    if (!do_all) note = atoi(note_str);
+                    
+                    if (do_all || (note >= 0 && note < NUM_BANKS)) {
                         if (start >= 0 && end > start) {
-                            banks[note].loop_start = start;
-                            banks[note].loop_end = end;
-                            banks[note].looping = true;
-                            char msg[128];
-                            snprintf(msg, sizeof(msg), "Bank %d looping set: %d to %d\n", note, start, end);
-                            hazel_append_output(ctx, msg, 0);
+                            if (do_all) {
+                                for (int i=0; i<NUM_BANKS; i++) {
+                                    banks[i].loop_start = start;
+                                    banks[i].loop_end = end;
+                                    banks[i].looping = true;
+                                }
+                                char msg[128];
+                                snprintf(msg, sizeof(msg), "All banks looping set: %d to %d\n", start, end);
+                                hazel_append_output(ctx, msg, 0);
+                            } else {
+                                banks[note].loop_start = start;
+                                banks[note].loop_end = end;
+                                banks[note].looping = true;
+                                char msg[128];
+                                snprintf(msg, sizeof(msg), "Bank %d looping set: %d to %d\n", note, start, end);
+                                hazel_append_output(ctx, msg, 0);
+                            }
                         } else {
-                            banks[note].looping = false;
-                            char msg[64];
-                            snprintf(msg, sizeof(msg), "Bank %d looping disabled\n", note);
-                            hazel_append_output(ctx, msg, 0);
+                            if (do_all) {
+                                for (int i=0; i<NUM_BANKS; i++) banks[i].looping = false;
+                                hazel_append_output(ctx, "All banks looping disabled\n", 0);
+                            } else {
+                                banks[note].looping = false;
+                                char msg[64];
+                                snprintf(msg, sizeof(msg), "Bank %d looping disabled\n", note);
+                                hazel_append_output(ctx, msg, 0);
+                            }
                         }
                     } else {
-                        hazel_append_output(ctx, "Invalid note number\n", 1);
+                        hazel_append_output(ctx, "Invalid note number (use 0-127 or 'all')\n", 1);
                     }
                 } else {
-                    hazel_append_output(ctx, "Usage: \\loop <note> [start end]\n", 1);
+                    hazel_append_output(ctx, "Usage: \\loop <note|all> [start end]\n", 1);
                 }
             } else if (p[1] == 'm' && p[2] == 'c') {
                 char arg_str[16] = {0};
