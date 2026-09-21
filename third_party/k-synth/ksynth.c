@@ -85,10 +85,10 @@ static void ks_init_aliases(ks_ctx *ctx) {
     bind_alias(ctx, "right", "k x");
     bind_alias(ctx, "quantize", "v x");
     bind_alias(ctx, "saw", "o x");
-    bind_alias(ctx, "slice", "x S y");
-    bind_alias(ctx, "speed", "x Z y");
-    bind_alias(ctx, "delay", "x D y");
-    bind_alias(ctx, "analyze", "x F y");
+    bind_alias(ctx, "slice", "x sl y");
+    bind_alias(ctx, "speed", "x rs y");
+    bind_alias(ctx, "delay", "x dl y");
+    bind_alias(ctx, "analyze", "x ft y");
 }
 
 ks_ctx* ks_create(size_t mem_limit, long long gas_limit, double sample_rate) {
@@ -567,12 +567,12 @@ K mo(ks_ctx *ctx, char c, K b) {
     k_free(ctx, b); return x;
 }
 
-K dy(ks_ctx *ctx, char c, K a, K b) {
+K dy(ks_ctx *ctx, const char *op, K a, K b) {
     if (!a || !b) { k_free(ctx, a); k_free(ctx, b); return NULL; }
 
-    if (c >= 'A' && c <= 'Z') {
-        char vn[2] = {c, 0};
-        K var = k_get_var_str(ctx, vn);
+    /* User-defined dyadic functions (any name) */
+    {
+        K var = k_get_var_str(ctx, op);
         if (k_is_func(var)) {
             K call_args[2] = {a, b};
             return k_call(ctx, var, call_args, 2);
@@ -580,6 +580,91 @@ K dy(ks_ctx *ctx, char c, K a, K b) {
     }
 
     K x;
+    char c = op[0];
+
+    /* --- Multi-character verbs (dispatched first) --- */
+
+    if (strcmp(op, "dl") == 0) {
+        /* Dyadic dl: signal dl (delay gain) — feedback delay / echo.
+           Adds a copy of the signal delayed by 'delay' samples, scaled by 'gain'.
+           Example: W2: W dl (4410 0.4)   / 100ms echo at 40% feedback */
+        int dd   = (int)b->f[0];
+        double g = (b->n > 1) ? b->f[1] : 0.4;
+        GAS_CHECK(ctx, a->n);
+        x = k_new(ctx, a->n);
+        for (int i = 0; i < a->n; i++) {
+            double delayed = (i >= dd) ? x->f[i-dd] : 0;
+            x->f[i] = safe_val(a->f[i] + (g * delayed));
+        }
+        k_free(ctx, a); k_free(ctx, b); return x;
+    }
+
+    if (strcmp(op, "sl") == 0) {
+        /* Dyadic sl: signal sl (start length) — slice / extract sub-array.
+           Returns a new array containing length samples starting at start.
+           Example: W2: W sl (11025 88200)   / extract 2 seconds starting at 0.25s */
+        int start = 0;
+        int len = 0;
+        if (b->n >= 1) start = (int)b->f[0];
+        if (b->n >= 2) len = (int)b->f[1];
+        if (len <= 0) { k_free(ctx, a); k_free(ctx, b); return k_new(ctx, 0); }
+        GAS_CHECK(ctx, len);
+        x = k_new(ctx, len);
+        for (int i = 0; i < len; i++) {
+            int idx = start + i;
+            x->f[i] = (idx >= 0 && idx < a->n) ? a->f[idx] : 0.0;
+        }
+        k_free(ctx, a); k_free(ctx, b); return x;
+    }
+
+    if (strcmp(op, "ft") == 0) {
+        /* Dyadic ft: signal ft max_harmonics — Fourier transform (DFT).
+           Returns harmonic magnitudes for harmonics 1..max_harmonics.
+           Example: H: W ft 64   / extract first 64 harmonic magnitudes */
+        if (a->n == 0) { k_free(ctx, a); k_free(ctx, b); return k_new(ctx, 0); }
+        int max_h = (b->n > 0) ? (int)b->f[0] : 128;
+        if (max_h <= 0) max_h = 1;
+        if (max_h > 10000) max_h = 10000;
+        GAS_CHECK(ctx, (long long)a->n * max_h);
+        x = k_new(ctx, max_h);
+        double two_pi_over_N = 2.0 * M_PI / a->n;
+        for (int k = 0; k < max_h; k++) {
+            double h = k + 1;
+            double re = 0.0, im = 0.0;
+            for (int n = 0; n < a->n; n++) {
+                double angle = two_pi_over_N * h * n;
+                re += a->f[n] * cos(angle);
+                im += a->f[n] * sin(angle);
+            }
+            x->f[k] = (2.0 / a->n) * sqrt(re * re + im * im);
+        }
+        k_free(ctx, a); k_free(ctx, b); return x;
+    }
+
+    if (strcmp(op, "rs") == 0) {
+        /* Dyadic rs: signal rs speed — resample with linear interpolation.
+           speed > 1 = faster/shorter, speed < 1 = slower/longer.
+           Example: W2: W rs 0.5   / half-speed (double length) */
+        double speed = (b->n > 0) ? b->f[0] : 1.0;
+        if (speed <= 0.0) speed = 1.0;
+        int len = (int)((double)a->n / speed);
+        GAS_CHECK(ctx, len);
+        x = k_new(ctx, len);
+        for(int i=0; i<len; i++) {
+            double pos = i * speed;
+            int idx = (int)pos;
+            double frac = pos - idx;
+            double v1 = (idx >= 0 && idx < a->n) ? a->f[idx] : 0.0;
+            double v2 = (idx+1 >= 0 && idx+1 < a->n) ? a->f[idx+1] : 0.0;
+            x->f[i] = v1 * (1.0 - frac) + v2 * frac;
+        }
+        k_free(ctx, a); k_free(ctx, b); return x;
+    }
+
+    /* If multi-char and not matched above, fall through to arithmetic */
+    if (op[1] != '\0') goto dy_arithmetic;
+
+    /* --- Single-character verbs --- */
 
     if (c == 'z') {
         int mn = (a->n < b->n) ? a->n : b->n;
@@ -742,67 +827,99 @@ K dy(ks_ctx *ctx, char c, K a, K b) {
         k_free(ctx, a); k_free(ctx, b); return x;
     }
 
-    if (c == 'D') {
-        int dd   = (int)b->f[0];
-        double g = (b->n > 1) ? b->f[1] : 0.4;
-        GAS_CHECK(ctx, a->n);
+    if (c == 'x') {
+        /* Dyadic x: W x threshold — zero-crossing finder.
+           Returns array of sample indices where W crosses zero.
+           A crossing is detected when adjacent samples change sign,
+           or when |W[i]| <= threshold.
+           Useful for finding click-free cut/splice points for loops.
+           (Monadic x is exp-decay; dyadic x is zero-crossing.)
+           Example: ZC: W x 0.01    / find all zero crossings */
+        double thresh = (b->n > 0) ? fabs(b->f[0]) : 0.001;
+        /* First pass: count crossings */
+        int cnt = 0;
+        for (int i = 0; i < a->n - 1; i++) {
+            double v0 = a->f[i], v1 = a->f[i + 1];
+            if ((v0 >= 0 && v1 < 0) || (v0 < 0 && v1 >= 0) ||
+                fabs(v0) <= thresh) {
+                cnt++;
+            }
+        }
+        GAS_CHECK(ctx, cnt > 0 ? cnt : 1);
+        x = k_new(ctx, cnt > 0 ? cnt : 1);
+        if (cnt == 0) { x->f[0] = 0; k_free(ctx, a); k_free(ctx, b); return x; }
+        int xi = 0;
+        for (int i = 0; i < a->n - 1 && xi < cnt; i++) {
+            double v0 = a->f[i], v1 = a->f[i + 1];
+            if ((v0 >= 0 && v1 < 0) || (v0 < 0 && v1 >= 0) ||
+                fabs(v0) <= thresh) {
+                x->f[xi++] = (double)i;
+            }
+        }
+        k_free(ctx, a); k_free(ctx, b); return x;
+    }
+
+    if (c == 'l') {
+        /* Dyadic l: W l (period window) — loop similarity score.
+           For each position i in W, computes the RMS difference between
+           W[i..i+window] and W[i+period..i+period+window].
+           Lower values indicate better loop splice points.
+           Returns array of scores (same length as W).
+           Positions where the comparison window exceeds array bounds
+           are assigned a large penalty value (1e6).
+           (Monadic l is log; dyadic l is loop-score.)
+           Example: SC: W l (88200 512)   / score 2-second loop candidates */
+        int period = (b->n > 0) ? (int)b->f[0] : 44100;
+        int window = (b->n > 1) ? (int)b->f[1] : 512;
+        if (period < 1) period = 1;
+        if (window < 1) window = 1;
+        GAS_CHECK(ctx, (long long)a->n + (long long)a->n * window);
         x = k_new(ctx, a->n);
         for (int i = 0; i < a->n; i++) {
-            double delayed = (i >= dd) ? x->f[i-dd] : 0;
-            x->f[i] = safe_val(a->f[i] + (g * delayed));
-        }
-        k_free(ctx, a); k_free(ctx, b); return x;
-    }
-
-    if (c == 'S') {
-        int start = 0;
-        int len = 0;
-        if (b->n >= 1) start = (int)b->f[0];
-        if (b->n >= 2) len = (int)b->f[1];
-        if (len <= 0) { k_free(ctx, a); k_free(ctx, b); return k_new(ctx, 0); }
-        GAS_CHECK(ctx, len);
-        x = k_new(ctx, len);
-        for (int i = 0; i < len; i++) {
-            int idx = start + i;
-            x->f[i] = (idx >= 0 && idx < a->n) ? a->f[idx] : 0.0;
-        }
-        k_free(ctx, a); k_free(ctx, b); return x;
-    }
-
-    if (c == 'F') {
-        if (a->n == 0) { k_free(ctx, a); k_free(ctx, b); return k_new(ctx, 0); }
-        int max_h = (b->n > 0) ? (int)b->f[0] : 128;
-        if (max_h <= 0) max_h = 1;
-        if (max_h > 10000) max_h = 10000;
-        GAS_CHECK(ctx, (long long)a->n * max_h);
-        x = k_new(ctx, max_h);
-        double two_pi_over_N = 2.0 * M_PI / a->n;
-        for (int k = 0; k < max_h; k++) {
-            double h = k + 1;
-            double re = 0.0, im = 0.0;
-            for (int n = 0; n < a->n; n++) {
-                double angle = two_pi_over_N * h * n;
-                re += a->f[n] * cos(angle);
-                im += a->f[n] * sin(angle);
+            if (i + window > a->n || i + period + window > a->n) {
+                x->f[i] = 1e6;
+                continue;
             }
-            x->f[k] = (2.0 / a->n) * sqrt(re * re + im * im);
+            double sum = 0.0;
+            for (int j = 0; j < window; j++) {
+                double diff = a->f[i + j] - a->f[i + period + j];
+                sum += diff * diff;
+            }
+            x->f[i] = sqrt(sum / window);
         }
         k_free(ctx, a); k_free(ctx, b); return x;
     }
 
-    if (c == 'Z') {
-        double speed = (b->n > 0) ? b->f[0] : 1.0;
-        if (speed <= 0.0) speed = 1.0;
-        int len = (int)((double)a->n / speed);
-        GAS_CHECK(ctx, len);
-        x = k_new(ctx, len);
-        for(int i=0; i<len; i++) {
-            double pos = i * speed;
-            int idx = (int)pos;
-            double frac = pos - idx;
-            double v1 = (idx >= 0 && idx < a->n) ? a->f[idx] : 0.0;
-            double v2 = (idx+1 >= 0 && idx+1 < a->n) ? a->f[idx+1] : 0.0;
-            x->f[i] = v1 * (1.0 - frac) + v2 * frac;
+    if (c == 'c') {
+        /* Dyadic c: W c (start end xfade) — crossfade loop join.
+           Creates a copy of W with a crossfade applied at the loop boundary.
+           The last xfade samples before end are blended with the first
+           xfade samples after start, so that looping from start to end
+           produces a seamless, click-free transition.
+           If xfade is omitted, defaults to 4410 samples (0.1s at 44100).
+           Output has the same length as input W.
+           (Monadic c is cos; dyadic c is crossfade.)
+           Example: W2: W c (11025 99225 2205)   / crossfade 50ms at loop seam */
+        int start = (b->n > 0) ? (int)b->f[0] : 0;
+        int end   = (b->n > 1) ? (int)b->f[1] : a->n;
+        int xfade = (b->n > 2) ? (int)b->f[2] : 4410;
+        if (start < 0) start = 0;
+        if (end > a->n) end = a->n;
+        if (xfade > end - start) xfade = end - start;
+        if (xfade < 1) xfade = 1;
+        GAS_CHECK(ctx, a->n);
+        x = k_new(ctx, a->n);
+        memcpy(x->f, a->f, a->n * sizeof(double));
+        /* Crossfade: blend the tail of the loop with the head of the loop.
+           At end-xfade the output is 100% original, at end it is 100% loop-start. */
+        for (int i = 0; i < xfade; i++) {
+            double fade_out = (double)(xfade - i) / (double)xfade;
+            double fade_in  = (double)i / (double)xfade;
+            int ei = end - xfade + i;   /* position in tail */
+            int si = start + i;          /* corresponding position in head */
+            if (ei >= 0 && ei < a->n && si >= 0 && si < a->n) {
+                x->f[ei] = a->f[ei] * fade_out + a->f[si] * fade_in;
+            }
         }
         k_free(ctx, a); k_free(ctx, b); return x;
     }
@@ -816,6 +933,7 @@ K dy(ks_ctx *ctx, char c, K a, K b) {
         k_free(ctx, a); k_free(ctx, b); return x;
     }
 
+    dy_arithmetic:
     /* arithmetic: element-wise, length = max of inputs, shorter side cycles */
     {
         int mn = a->n > b->n ? a->n : b->n;
@@ -1076,7 +1194,13 @@ K expr_tok(ks_ctx *ctx, Token **t) {
         // Is the next token an operator?
         int is_operator = 0;
         if ((*t)->type == TOK_ID && strlen((*t)->str_val) == 1) {
-            if (strchr("+-*%^&|<>=,#osfzt haqle rpciw dvmbu jkn gSZDF", (*t)->str_val[0])) {
+            if (strchr("+-*%^&|<>=,#osfzt haqle rpciw dvmbu jkn g", (*t)->str_val[0])) {
+                is_operator = 1;
+            }
+        } else if ((*t)->type == TOK_ID) {
+            /* Multi-character built-in verb names */
+            const char *w = (*t)->str_val;
+            if (strcmp(w,"dl")==0 || strcmp(w,"sl")==0 || strcmp(w,"ft")==0 || strcmp(w,"rs")==0) {
                 is_operator = 1;
             }
         }
@@ -1102,7 +1226,7 @@ K expr_tok(ks_ctx *ctx, Token **t) {
             K call_args[2] = {x, b};
             return k_call(ctx, op_func, call_args, 2);
         }
-        char op = (*t)->str_val[0];
+        const char *op = (*t)->str_val;
         (*t)++;
         return dy(ctx, op, x, expr_tok(ctx, t));
     }
