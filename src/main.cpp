@@ -220,10 +220,14 @@ void cb(ma_device* d, void* o, const void* i, ma_uint32 n) {
       }
       
       if (voices[v].state == 2) {
-          if (voices[v].looping && voices[v].loop_end < len) {
-              // We have a tail! Don't force fade out, let it play to the end.
+          if (!voices[v].looping) {
+              // One-shot: Note-Off is ignored; play through to end of buffer
+          } else if (voices[v].loop_end < len) {
+              // Looped with baked-in tail: stop wrapping (already gated on state==1),
+              // drain the tail to the end of the buffer
           } else {
-              voices[v].release_gain *= 0.999f; // fast fade out
+              // Looped, no tail: fade out on Note-Off
+              voices[v].release_gain *= 0.999f;
           }
       }
       
@@ -461,7 +465,14 @@ void my_eval_engine(const char* input, hazel_ctx_t* ctx, void* user_data) {
                             
                             voices[vslot].atten = atten;
                             voices[vslot].stereo = 0; // banks are mono for now
+                            voices[vslot].looping = banks[slot].looping;
+                            voices[vslot].loop_start = banks[slot].loop_start;
+                            voices[vslot].loop_end = banks[slot].loop_end;
+                            voices[vslot].state = 1;
+                            voices[vslot].release_gain = 1.0f;
+                            voices[vslot].note = slot;
                             voices[vslot].active = 1;
+                            
                             char msg[128];
                             snprintf(msg, sizeof(msg), "Playing bank %d (vel:%.0f, semi:%.1f, gain:%.1fdB, sens:%.2f)\n", slot, velocity, semis, gain_db, vel_sens);
                             hazel_append_output(ctx, msg, 0);
@@ -495,6 +506,9 @@ void my_eval_engine(const char* input, hazel_ctx_t* ctx, void* user_data) {
                             banks[i].base_gain_db = gain_db;
                             banks[i].base_atten = atten;
                             banks[i].base_vel_sens = vel_sens;
+                            banks[i].looping = false;
+                            banks[i].loop_start = 0;
+                            banks[i].loop_end = 0;
                         }
                         char msg[128];
                         snprintf(msg, sizeof(msg), "Banked %s across all %d MIDI notes (Base Note: %d)\n", v_name, NUM_BANKS, base_note);
@@ -557,6 +571,7 @@ void my_eval_engine(const char* input, hazel_ctx_t* ctx, void* user_data) {
                         }
                         if (slot != -1) {
                             if (voices[slot].buffer && voices[slot].owns_buffer) free(voices[slot].buffer);
+                            
                             voices[slot].n = r;
                             voices[slot].buffer = (float*)malloc(r * sizeof(float));
                             memcpy(voices[slot].buffer, buf, r * sizeof(float));
@@ -566,16 +581,14 @@ void my_eval_engine(const char* input, hazel_ctx_t* ctx, void* user_data) {
                             voices[slot].gain = 1.0f;
                             voices[slot].atten = 1.0f;
                             voices[slot].stereo = is_stereo;
-                            //
                             voices[slot].looping = false;
                             voices[slot].loop_start = 0;
                             voices[slot].loop_end = 0;
-                            voices[slot].state = 0;
+                            voices[slot].state = 1;
                             voices[slot].release_gain = 1.0f;
-                            voices[slot].note = 01;
-                            //
+                            voices[slot].note = -1;
                             voices[slot].active = 1;
-                            
+
                             if (!is_quiet) {
                                 char msg[64];
                                 snprintf(msg, sizeof(msg), "playing %s in slot %d (%s)\n", v_name, slot, is_stereo ? "stereo" : "mono");
@@ -608,6 +621,9 @@ void my_eval_engine(const char* input, hazel_ctx_t* ctx, void* user_data) {
                         banks[slot].base_gain_db = gain_db;
                         banks[slot].base_atten = atten;
                         banks[slot].base_vel_sens = vel_sens;
+                        banks[slot].looping = false;
+                        banks[slot].loop_start = 0;
+                        banks[slot].loop_end = 0;
                         char msg[128];
                         snprintf(msg, sizeof(msg), "Banked %s into slot %d (semi:%.1f, gain:%.1fdB, sens:%.2f)\n", v_name, slot, semis, gain_db, vel_sens);
                         hazel_append_output(ctx, msg, 0);
