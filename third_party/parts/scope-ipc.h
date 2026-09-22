@@ -39,6 +39,18 @@ typedef struct {
   char track_name[SKRED_SCOPE_TRACK_COUNT][SKRED_SCOPE_TRACK_NAME_MAX];
 } skred_scope_header_t;
 
+#ifndef static_assert
+#  if defined(__cplusplus)
+     /* C++ has static_assert built-in */
+#  elif defined(__STDC_VERSION__) && __STDC_VERSION__ >= 202311L
+     /* C23 has static_assert built-in */
+#  elif defined(__STDC_VERSION__) && __STDC_VERSION__ >= 201112L
+#    include <assert.h>
+#  else
+#    define static_assert(cond, msg) _Static_assert(cond, msg)
+#  endif
+#endif
+
 static_assert(sizeof(skred_scope_header_t) == 264,
                "scope IPC header layout changed");
 static_assert(offsetof(skred_scope_header_t, sequence) == 48,
